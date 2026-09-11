@@ -243,7 +243,9 @@ public sealed class CommandProcessor
             _log("usage: calibrate <token> [auto on|off]");
             return;
         }
-        var timeout = TimeSpan.FromSeconds(5);
+        // Some power meters (e.g. Garmin Vector 2) take several seconds to complete a manual-zero
+        // calibration before responding; a short timeout here reads as a false "timed out"/rejection.
+        var timeout = TimeSpan.FromSeconds(15);
         try
         {
             PowerMeterCalibrationResult r;
