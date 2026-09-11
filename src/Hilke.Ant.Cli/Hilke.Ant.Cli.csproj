@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Terminal.Gui" Version="1.19.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Hilke.Ant.Transport.Serial\Hilke.Ant.Transport.Serial.csproj" />
+    <ProjectReference Include="..\Hilke.Ant.Plus\Hilke.Ant.Plus.csproj" />
+    <ProjectReference Include="..\Hilke.Ant.Testing\Hilke.Ant.Testing.csproj" />
+  </ItemGroup>
+</Project>
