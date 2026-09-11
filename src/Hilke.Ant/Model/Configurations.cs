@@ -37,7 +37,7 @@ public sealed record ChannelConfiguration
 public sealed record ScanConfiguration
 {
     public byte NetworkNumber { get; init; }
-    public byte RfFrequency { get; init; } = AntConstants.AntPlusRfFrequency;
+    public byte RfFrequency { get; init; }
     public ChannelId ChannelId { get; init; } = ChannelId.Wildcard();
     public bool UseExtendedMessages { get; init; } = true;
 }

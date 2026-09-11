@@ -103,7 +103,7 @@ public sealed class PowerMeterCalibrationSession
     private CancellationTokenSource? _timeoutCts;
     private PowerMeterCalibrationState? _pendingRaise;
 
-    public PowerMeterCalibrationSession(AntChannel channel)
+    internal PowerMeterCalibrationSession(AntChannel channel)
     {
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
     }

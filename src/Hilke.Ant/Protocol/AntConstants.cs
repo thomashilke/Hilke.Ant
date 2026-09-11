@@ -86,9 +86,6 @@ public static class AntConstants
     /// <summary>TX/RX sync byte prefixing every frame.</summary>
     public const byte Sync = 0xA4;
 
-    /// <summary>ANT+ RF frequency value (2457 MHz).</summary>
-    public const byte AntPlusRfFrequency = 57;
-
     /// <summary>Wildcard search timeout (never time out).</summary>
     public const byte WildcardSearchTimeout = 0xFF;
 

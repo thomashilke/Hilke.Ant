@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Hilke.Ant;
 using Hilke.Ant.Model;
 using Hilke.Ant.Protocol;
@@ -104,7 +105,7 @@ public sealed class TrainerDataDecoder : IDataPageDecoder<TrainerData>
 /// Reference ANT+ profile: wraps an <see cref="AntChannel"/> as an FE-C controller (slave that
 /// also transmits control pages), decodes general + trainer pages, and can command the trainer.
 /// </summary>
-public sealed class FitnessEquipmentMonitor : IAsyncDisposable
+public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
 {
     /// <summary>ANT+ FE-C device type.</summary>
     public const byte DeviceType = 17;
@@ -113,7 +114,7 @@ public sealed class FitnessEquipmentMonitor : IAsyncDisposable
     public const ushort ChannelPeriod = 8192;
 
     /// <summary>ANT+ managed network number.</summary>
-    public const byte AntPlusNetwork = 1;
+    public const byte AntPlusNetwork = AntPlusProtocol.NetworkNumber;
 
     private const byte BasicResistancePage = 0x30;
     private const byte TargetPowerPage = 0x31;
@@ -121,47 +122,82 @@ public sealed class FitnessEquipmentMonitor : IAsyncDisposable
     private readonly AntChannel _channel;
     private readonly GeneralFitnessDataDecoder _general = new();
     private readonly TrainerDataDecoder _trainer = new();
+    private readonly Channel<FitnessEquipmentUpdate> _readings = System.Threading.Channels.Channel.CreateBounded<FitnessEquipmentUpdate>(
+        new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = false, SingleWriter = true });
+    private readonly CancellationTokenSource _pumpCts;
+    private readonly Task _pump;
 
-    public FitnessEquipmentMonitor(AntChannel channel)
+    internal FitnessEquipmentMonitor(AntChannel channel)
     {
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
+        DeviceId = AntPlusDeviceId.FromCore(channel.Configuration.ChannelId);
+        _channel.StateChanged += OnChannelStateChanged;
+        _pumpCts = new CancellationTokenSource();
+        _pump = Task.Run(() => PumpAsync(_pumpCts.Token));
     }
-
-    public AntChannel Channel => _channel;
 
     public event EventHandler<GeneralFitnessData>? GeneralDataReceived;
     public event EventHandler<TrainerData>? TrainerDataReceived;
 
+    public AntPlusDeviceId DeviceId { get; }
+    public byte ChannelNumber => _channel.ChannelNumber;
+    public AntPlusChannelState State => _channel.State.ToPlus();
+    public event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
+    public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
+
+    private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
+        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus()));
+
     /// <summary>Default FE-C controller (slave) channel configuration.</summary>
-    public static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()
+    internal static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()
     {
         Type = ChannelType.BidirectionalSlave,
         NetworkNumber = AntPlusNetwork,
         ChannelId = id ?? ChannelId.Wildcard(DeviceType),
-        RfFrequency = AntConstants.AntPlusRfFrequency,
+        RfFrequency = AntPlusProtocol.RfFrequency,
         ChannelPeriod = ChannelPeriod,
         UseExtendedMessages = true,
         InactivityTimeout = TimeSpan.FromSeconds(4),
     };
 
     /// <summary>Decode and stream FE-C updates (general + trainer pages) from the channel.</summary>
-    public async IAsyncEnumerable<FitnessEquipmentUpdate> ReadingsAsync(
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    public IAsyncEnumerable<FitnessEquipmentUpdate> ReadingsAsync(CancellationToken ct = default)
+        => _readings.Reader.ReadAllAsync(ct);
+
+    private async Task PumpAsync(CancellationToken ct)
     {
-        await foreach (var message in _channel.ReceiveAsync(ct).ConfigureAwait(false))
+        try
         {
-            var span = message.Payload.Span;
-            if (_general.TryDecode(span, out var general))
+            await foreach (var message in _channel.ReceiveAsync(ct).ConfigureAwait(false))
             {
-                GeneralDataReceived?.Invoke(this, general);
-                yield return new FitnessEquipmentUpdate(FitnessEquipmentPage.GeneralData, general, null);
-            }
-            else if (_trainer.TryDecode(span, out var trainer))
-            {
-                TrainerDataReceived?.Invoke(this, trainer);
-                yield return new FitnessEquipmentUpdate(FitnessEquipmentPage.SpecificTrainerData, null, trainer);
+                var span = message.Payload.Span;
+                AntPlusTelemetryUpdate? update = null;
+                if (_general.TryDecode(span, out var general))
+                {
+                    GeneralDataReceived?.Invoke(this, general);
+                    _readings.Writer.TryWrite(new FitnessEquipmentUpdate(FitnessEquipmentPage.GeneralData, general, null));
+                    update = new AntPlusTelemetryUpdate { SpeedMps = general.SpeedMetersPerSecond };
+                    if (general.HeartRate is { } fhr)
+                        update = update with { HeartRate = fhr };
+                }
+                else if (_trainer.TryDecode(span, out var trainer))
+                {
+                    TrainerDataReceived?.Invoke(this, trainer);
+                    _readings.Writer.TryWrite(new FitnessEquipmentUpdate(FitnessEquipmentPage.SpecificTrainerData, null, trainer));
+                    update = new AntPlusTelemetryUpdate { Cadence = trainer.Cadence, TrainerStatus = $"0x{trainer.TrainerStatus:X1}" };
+                    if (trainer.InstantaneousPower is { } ip)
+                        update = update with { PowerWatts = ip };
+                }
+                CommonDataPageDecoders.TryDispatch(span,
+                    b => update = (update ?? new AntPlusTelemetryUpdate()) with { Battery = b.Status, BatteryVolts = b.Voltage },
+                    m => update = (update ?? new AntPlusTelemetryUpdate()) with { Manufacturer = m },
+                    p => update = (update ?? new AntPlusTelemetryUpdate()) with { Product = p });
+                if (update is { } u)
+                    TelemetryUpdated?.Invoke(this, u);
             }
         }
+        catch (OperationCanceledException) { }
+        finally { _readings.Writer.TryComplete(); }
     }
 
     /// <summary>Encode the FE-C Target Power control page (0x31); target in whole watts.</summary>
@@ -186,5 +222,15 @@ public sealed class FitnessEquipmentMonitor : IAsyncDisposable
     public Task SetBasicResistanceAsync(double percent, CancellationToken ct = default)
         => _channel.SendAcknowledgedAsync(BuildBasicResistancePage(percent), ct);
 
-    public ValueTask DisposeAsync() => _channel.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        _channel.StateChanged -= OnChannelStateChanged;
+        _pumpCts.Cancel();
+        _readings.Writer.TryComplete();
+        try { await _pump.ConfigureAwait(false); } catch { /* pump observes its own cancellation */ }
+        _pumpCts.Dispose();
+        try { await _channel.CloseAsync().ConfigureAwait(false); } catch { /* best effort, mirrors today's AntSession.DisconnectAsync catch */ }
+        try { await _channel.UnassignAsync().ConfigureAwait(false); } catch { /* best effort */ }
+        await _channel.DisposeAsync().ConfigureAwait(false);
+    }
 }

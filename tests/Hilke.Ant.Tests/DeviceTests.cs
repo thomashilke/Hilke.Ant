@@ -33,7 +33,7 @@ public class DeviceTests
     {
         Type = ChannelType.BidirectionalSlave,
         ChannelId = ChannelId.Wildcard(),
-        RfFrequency = AntConstants.AntPlusRfFrequency,
+        RfFrequency = 57, // arbitrary valid test frequency, unrelated to ANT+
         ChannelPeriod = 8070,
         UseExtendedMessages = true,
         InactivityTimeout = inactivity,

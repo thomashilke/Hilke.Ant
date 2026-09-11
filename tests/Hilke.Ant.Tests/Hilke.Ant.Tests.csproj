@@ -11,6 +11,6 @@
     <ProjectReference Include="..\..\src\Hilke.Ant\Hilke.Ant.csproj" />
     <ProjectReference Include="..\..\src\Hilke.Ant.Testing\Hilke.Ant.Testing.csproj" />
     <ProjectReference Include="..\..\src\Hilke.Ant.Plus\Hilke.Ant.Plus.csproj" />
-    <ProjectReference Include="..\..\src\Hilke.Ant.Cli\Hilke.Ant.Cli.csproj" />
+    <ProjectReference Include="..\..\samples\Hilke.Ant.Cli\Hilke.Ant.Cli.csproj" />
   </ItemGroup>
 </Project>

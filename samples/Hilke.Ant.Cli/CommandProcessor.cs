@@ -1,5 +1,4 @@
 using System.Globalization;
-using Hilke.Ant.Model;
 using Hilke.Ant.Plus;
 
 namespace Hilke.Ant.Cli;
@@ -90,7 +89,7 @@ public sealed class CommandProcessor
             else
                 await _session.StopScanAsync();
         }
-        catch (Exception ex) when (ex is InvalidOperationException or RadioBusyException)
+        catch (Exception ex) when (ex is InvalidOperationException or AntPlusBusyException)
         {
             _log(ex.Message);
         }
@@ -108,7 +107,7 @@ public sealed class CommandProcessor
         {
             string name = e.Alias is { } a ? $"{e.Token} ({a})" : e.Token;
             string state = e.Connected ? e.State.ToString() : "visible";
-            _log($"{name}  {e.ProfileName}  {state}  {ProfileCatalog.FormatPrimary(e)}");
+            _log($"{name}  {e.ProfileName}  {state}  {DeviceDisplay.FormatPrimary(e)}");
         }
     }
 
@@ -124,7 +123,7 @@ public sealed class CommandProcessor
             var entry = await _session.ConnectAsync(args[1]);
             _log($"connect: {entry.Token} ({entry.ProfileName}).");
         }
-        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or RadioBusyException)
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or AntPlusBusyException or AntPlusCommandException or AntPlusTimeoutException)
         {
             _log($"connect: {ex.Message}");
         }

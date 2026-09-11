@@ -74,7 +74,7 @@ public sealed class BicyclePowerDecoder : IDataPageDecoder<BicyclePowerReading>
 /// Reference ANT+ profile: wraps an <see cref="AntChannel"/> configured as a Bicycle Power
 /// display (slave), decodes standard power-only pages, and surfaces readings.
 /// </summary>
-public sealed class BicyclePowerMonitor : IAsyncDisposable
+public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
 {
     /// <summary>ANT+ Bicycle Power device type.</summary>
     public const byte DeviceType = 11;
@@ -83,76 +83,64 @@ public sealed class BicyclePowerMonitor : IAsyncDisposable
     public const ushort ChannelPeriod = 8182;
 
     /// <summary>ANT+ managed network number.</summary>
-    public const byte AntPlusNetwork = 1;
+    public const byte AntPlusNetwork = AntPlusProtocol.NetworkNumber;
 
     private readonly AntChannel _channel;
     private readonly BicyclePowerDecoder _decoder = new();
     private readonly PowerMeterCalibrationSession _calibration;
     private readonly Channel<BicyclePowerReading> _readings = System.Threading.Channels.Channel.CreateBounded<BicyclePowerReading>(
         new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = false, SingleWriter = true });
-    private readonly object _pumpGate = new();
-    private Task? _pump;
-    private CancellationTokenSource? _pumpCts;
+    private readonly CancellationTokenSource _pumpCts;
+    private readonly Task _pump;
 
-    public BicyclePowerMonitor(AntChannel channel)
+    internal BicyclePowerMonitor(AntChannel channel)
     {
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
         _calibration = new PowerMeterCalibrationSession(_channel);
+        DeviceId = AntPlusDeviceId.FromCore(channel.Configuration.ChannelId);
+        _channel.StateChanged += OnChannelStateChanged;
+        _pumpCts = new CancellationTokenSource();
+        _pump = Task.Run(() => PumpAsync(_pumpCts.Token));
     }
 
-    public AntChannel Channel => _channel;
+    public AntPlusDeviceId DeviceId { get; }
+    public byte ChannelNumber => _channel.ChannelNumber;
+    public AntPlusChannelState State => _channel.State.ToPlus();
+    public event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
+    public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
+
+    private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
+        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus()));
 
     /// <summary>The power-meter calibration session driven by this monitor's read pump.</summary>
     public PowerMeterCalibrationSession Calibration => _calibration;
 
     /// <summary>Send a manual-zero calibration request and await the sensor's response.</summary>
     public Task<PowerMeterCalibrationResult> RequestManualZeroAsync(TimeSpan timeout, CancellationToken ct = default)
-    {
-        EnsurePump();
-        return _calibration.RequestManualZeroAsync(timeout, ct);
-    }
+        => _calibration.RequestManualZeroAsync(timeout, ct);
 
     /// <summary>Configure auto-zero on the sensor and await its response.</summary>
     public Task<PowerMeterCalibrationResult> ConfigureAutoZeroAsync(bool enable, TimeSpan timeout, CancellationToken ct = default)
-    {
-        EnsurePump();
-        return _calibration.ConfigureAutoZeroAsync(enable, timeout, ct);
-    }
+        => _calibration.ConfigureAutoZeroAsync(enable, timeout, ct);
 
     /// <summary>Raised for each decoded power reading.</summary>
     public event EventHandler<BicyclePowerReading>? PowerReceived;
 
     /// <summary>Default Bicycle Power display (slave) channel configuration.</summary>
-    public static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()
+    internal static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()
     {
         Type = ChannelType.BidirectionalSlave,
         NetworkNumber = AntPlusNetwork,
         ChannelId = id ?? ChannelId.Wildcard(DeviceType),
-        RfFrequency = AntConstants.AntPlusRfFrequency,
+        RfFrequency = AntPlusProtocol.RfFrequency,
         ChannelPeriod = ChannelPeriod,
         UseExtendedMessages = true,
         InactivityTimeout = TimeSpan.FromSeconds(4),
     };
 
     /// <summary>Decode and stream power readings from the underlying channel.</summary>
-    public async IAsyncEnumerable<BicyclePowerReading> ReadingsAsync(
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
-    {
-        EnsurePump();
-        await foreach (var reading in _readings.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-            yield return reading;
-    }
-
-    private void EnsurePump()
-    {
-        lock (_pumpGate)
-        {
-            if (_pump is not null)
-                return;
-            _pumpCts = new CancellationTokenSource();
-            _pump = Task.Run(() => PumpAsync(_pumpCts.Token));
-        }
-    }
+    public IAsyncEnumerable<BicyclePowerReading> ReadingsAsync(CancellationToken ct = default)
+        => _readings.Reader.ReadAllAsync(ct);
 
     private async Task PumpAsync(CancellationToken ct)
     {
@@ -160,12 +148,27 @@ public sealed class BicyclePowerMonitor : IAsyncDisposable
         {
             await foreach (var message in _channel.ReceiveAsync(ct).ConfigureAwait(false))
             {
-                _calibration.HandleData(message.Payload.Span, message.ReceivedAt);
-                if (_decoder.TryDecode(message.Payload.Span, out var reading))
+                var span = message.Payload.Span;
+                _calibration.HandleData(span, message.ReceivedAt);
+
+                AntPlusTelemetryUpdate? update = null;
+                if (_decoder.TryDecode(span, out var reading))
                 {
                     PowerReceived?.Invoke(this, reading);
                     _readings.Writer.TryWrite(reading);
+                    update = new AntPlusTelemetryUpdate
+                    {
+                        PowerWatts = reading.InstantaneousPower,
+                        Cadence = reading.Cadence,
+                        AveragePower = reading.AveragePower,
+                    };
                 }
+                CommonDataPageDecoders.TryDispatch(span,
+                    b => update = (update ?? new AntPlusTelemetryUpdate()) with { Battery = b.Status, BatteryVolts = b.Voltage },
+                    m => update = (update ?? new AntPlusTelemetryUpdate()) with { Manufacturer = m },
+                    p => update = (update ?? new AntPlusTelemetryUpdate()) with { Product = p });
+                if (update is { } u)
+                    TelemetryUpdated?.Invoke(this, u);
             }
         }
         catch (OperationCanceledException) { }
@@ -174,14 +177,13 @@ public sealed class BicyclePowerMonitor : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _pumpCts?.Cancel();
+        _channel.StateChanged -= OnChannelStateChanged;
+        _pumpCts.Cancel();
         _readings.Writer.TryComplete();
-        if (_pump is not null)
-        {
-            try { await _pump.ConfigureAwait(false); }
-            catch { /* pump cancellation/teardown errors are non-fatal */ }
-        }
-        _pumpCts?.Dispose();
+        try { await _pump.ConfigureAwait(false); } catch { /* pump observes its own cancellation */ }
+        _pumpCts.Dispose();
+        try { await _channel.CloseAsync().ConfigureAwait(false); } catch { /* best effort, mirrors today's AntSession.DisconnectAsync catch */ }
+        try { await _channel.UnassignAsync().ConfigureAwait(false); } catch { /* best effort */ }
         await _channel.DisposeAsync().ConfigureAwait(false);
     }
 }

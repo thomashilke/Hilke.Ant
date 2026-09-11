@@ -29,16 +29,39 @@ public sealed class SerialAntTransport : IAntTransport
         if (IsOpen)
             return ValueTask.CompletedTask;
 
+        _port = Open(assertHandshakeLines: true) ?? Open(assertHandshakeLines: false)!;
+        return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Opens the port, asserting DTR/RTS first (some ANTUSB-m sticks need them raised).
+    /// Several Linux USB-serial drivers — e.g. the generic/quirk driver certain ANTUSB-m sticks
+    /// bind to instead of cp210x — don't implement the DTR/RTS modem-control ioctls and fail
+    /// <see cref="SerialPort.Open"/> outright ("Inappropriate ioctl for device"). DTR/RTS aren't
+    /// required for ANT radio operation, so on that failure we retry without them.
+    /// </summary>
+    private SerialPort? Open(bool assertHandshakeLines)
+    {
         var port = new SerialPort(_portName, _baudRate, Parity.None, 8, StopBits.One)
         {
-            DtrEnable = true,
-            RtsEnable = true,
             ReadTimeout = 1000,
             WriteTimeout = 1000,
         };
-        port.Open();
-        _port = port;
-        return ValueTask.CompletedTask;
+        if (assertHandshakeLines)
+        {
+            port.DtrEnable = true;
+            port.RtsEnable = true;
+        }
+        try
+        {
+            port.Open();
+            return port;
+        }
+        catch (IOException) when (assertHandshakeLines)
+        {
+            port.Dispose();
+            return null;
+        }
     }
 
     public async ValueTask WriteAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default)

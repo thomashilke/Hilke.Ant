@@ -1,6 +1,7 @@
-using Hilke.Ant;
+using Hilke.Ant.Protocol;
 using Hilke.Ant.Cli;
 using Hilke.Ant.Model;
+using Hilke.Ant.Plus;
 using Hilke.Ant.Testing;
 using Hilke.Ant.Transport.Serial;
 using Terminal.Gui;
@@ -30,7 +31,7 @@ for (int i = 0; i < args.Length; i++)
 }
 
 var registry = new DeviceRegistry();
-AntDevice device;
+AntPlusNode node;
 SimulatedAntRadio? sim = null;
 using var appCts = new CancellationTokenSource();
 
@@ -38,9 +39,7 @@ if (simulate)
 {
     var transport = new InMemoryAntTransport();
     sim = new SimulatedAntRadio(transport);
-    device = new AntDevice(transport);
-    await device.OpenAsync();
-    await device.SetNetworkKeyAsync(1, new byte[8]);
+    node = await AntPlusNode.OpenAsync(transport);
 }
 else
 {
@@ -56,21 +55,10 @@ else
     }
 
     var transport = new SerialAntTransport(port, baud);
-    device = new AntDevice(transport);
-    await device.OpenAsync();
-
-    string? keyHex = Environment.GetEnvironmentVariable("ANT_NETWORK_KEY");
-    if (!string.IsNullOrWhiteSpace(keyHex) && keyHex.Length == 16)
-    {
-        await device.SetNetworkKeyAsync(1, Convert.FromHexString(keyHex));
-    }
-    else
-    {
-        TuiApp.AppendLog("Warning: ANT_NETWORK_KEY not set (16 hex chars). ANT+ pairing needs the licensed key.");
-    }
+    node = await AntPlusNode.OpenAsync(transport);
 }
 
-var session = new AntSession(device, registry, TuiApp.AppendLog);
+var session = new AntSession(node, registry, TuiApp.AppendLog);
 var processor = new CommandProcessor(session, registry, TuiApp.AppendLog, () => Application.RequestStop());
 
 if (sim is not null)
@@ -140,13 +128,13 @@ internal static class SimFeed
 
                     switch (e.DeviceType)
                     {
-                        case 120:
+                        case HeartRateMonitor.DeviceType:
                             sim.InjectBroadcast(ch, Hrm, tick % 5 == 0 ? batteryPage : hrmPage, rssi: -60);
                             break;
-                        case 11:
+                        case BicyclePowerMonitor.DeviceType:
                             sim.InjectBroadcast(ch, Power, powerPage, rssi: -55);
                             break;
-                        case 17:
+                        case FitnessEquipmentMonitor.DeviceType:
                             sim.InjectBroadcast(ch, Fec, tick % 2 == 0 ? fecGeneral : fecTrainer, rssi: -70);
                             // Complete any pending acknowledged control transfer.
                             sim.InjectEvent(ch, Hilke.Ant.Protocol.ChannelResponseCode.EventTransferTxCompleted);

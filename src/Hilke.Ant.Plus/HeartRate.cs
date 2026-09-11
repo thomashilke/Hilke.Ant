@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Hilke.Ant;
 using Hilke.Ant.Model;
 using Hilke.Ant.Protocol;
@@ -35,7 +36,7 @@ public sealed class HeartRatePageDecoder : IDataPageDecoder<HeartRateReading>
 /// Reference ANT+ profile: wraps an <see cref="AntChannel"/> configured for a heart rate monitor,
 /// decodes incoming pages, and surfaces readings via an event and an async stream.
 /// </summary>
-public sealed class HeartRateMonitor : IAsyncDisposable
+public sealed class HeartRateMonitor : IAntPlusProfileConnection
 {
     /// <summary>ANT+ HRM device type.</summary>
     public const byte DeviceType = 120;
@@ -44,47 +45,87 @@ public sealed class HeartRateMonitor : IAsyncDisposable
     public const ushort ChannelPeriod = 8070;
 
     /// <summary>ANT+ managed network number.</summary>
-    public const byte AntPlusNetwork = 1;
+    public const byte AntPlusNetwork = AntPlusProtocol.NetworkNumber;
 
     private readonly AntChannel _channel;
     private readonly HeartRatePageDecoder _decoder = new();
+    private readonly Channel<HeartRateReading> _readings = System.Threading.Channels.Channel.CreateBounded<HeartRateReading>(
+        new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = false, SingleWriter = true });
+    private readonly CancellationTokenSource _pumpCts;
+    private readonly Task _pump;
 
-    public HeartRateMonitor(AntChannel channel)
+    internal HeartRateMonitor(AntChannel channel)
     {
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
+        DeviceId = AntPlusDeviceId.FromCore(channel.Configuration.ChannelId);
+        _channel.StateChanged += OnChannelStateChanged;
+        _pumpCts = new CancellationTokenSource();
+        _pump = Task.Run(() => PumpAsync(_pumpCts.Token));
     }
-
-    /// <summary>The wrapped channel (for lifecycle: OpenAsync/CloseAsync/state).</summary>
-    public AntChannel Channel => _channel;
 
     /// <summary>Raised for each decoded heart rate reading.</summary>
     public event EventHandler<HeartRateReading>? HeartRateChanged;
 
+    public AntPlusDeviceId DeviceId { get; }
+    public byte ChannelNumber => _channel.ChannelNumber;
+    public AntPlusChannelState State => _channel.State.ToPlus();
+    public event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
+    public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
+
+    private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
+        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus()));
+
     /// <summary>Default HRM slave channel configuration (device type 120, ANT+ freq/period).</summary>
-    public static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()
+    internal static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()
     {
         Type = ChannelType.BidirectionalSlave,
         NetworkNumber = AntPlusNetwork,
         ChannelId = id ?? ChannelId.Wildcard(DeviceType),
-        RfFrequency = AntConstants.AntPlusRfFrequency,
+        RfFrequency = AntPlusProtocol.RfFrequency,
         ChannelPeriod = ChannelPeriod,
         UseExtendedMessages = true,
         InactivityTimeout = TimeSpan.FromSeconds(4),
     };
 
     /// <summary>Decode and stream readings from the underlying channel.</summary>
-    public async IAsyncEnumerable<HeartRateReading> ReadingsAsync(
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    public IAsyncEnumerable<HeartRateReading> ReadingsAsync(CancellationToken ct = default)
+        => _readings.Reader.ReadAllAsync(ct);
+
+    private async Task PumpAsync(CancellationToken ct)
     {
-        await foreach (var message in _channel.ReceiveAsync(ct).ConfigureAwait(false))
+        try
         {
-            if (_decoder.TryDecode(message.Payload.Span, out var reading))
+            await foreach (var message in _channel.ReceiveAsync(ct).ConfigureAwait(false))
             {
-                HeartRateChanged?.Invoke(this, reading);
-                yield return reading;
+                var span = message.Payload.Span;
+                AntPlusTelemetryUpdate? update = null;
+                if (_decoder.TryDecode(span, out var reading))
+                {
+                    HeartRateChanged?.Invoke(this, reading);
+                    _readings.Writer.TryWrite(reading);
+                    update = new AntPlusTelemetryUpdate { HeartRate = reading.ComputedHeartRate };
+                }
+                CommonDataPageDecoders.TryDispatch(span,
+                    b => update = (update ?? new AntPlusTelemetryUpdate()) with { Battery = b.Status, BatteryVolts = b.Voltage },
+                    m => update = (update ?? new AntPlusTelemetryUpdate()) with { Manufacturer = m },
+                    p => update = (update ?? new AntPlusTelemetryUpdate()) with { Product = p });
+                if (update is { } u)
+                    TelemetryUpdated?.Invoke(this, u);
             }
         }
+        catch (OperationCanceledException) { }
+        finally { _readings.Writer.TryComplete(); }
     }
 
-    public ValueTask DisposeAsync() => _channel.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        _channel.StateChanged -= OnChannelStateChanged;
+        _pumpCts.Cancel();
+        _readings.Writer.TryComplete();
+        try { await _pump.ConfigureAwait(false); } catch { /* pump observes its own cancellation */ }
+        _pumpCts.Dispose();
+        try { await _channel.CloseAsync().ConfigureAwait(false); } catch { /* best effort, mirrors today's AntSession.DisconnectAsync catch */ }
+        try { await _channel.UnassignAsync().ConfigureAwait(false); } catch { /* best effort */ }
+        await _channel.DisposeAsync().ConfigureAwait(false);
+    }
 }

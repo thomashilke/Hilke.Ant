@@ -103,3 +103,22 @@ public sealed class ProductInfoDecoder : IDataPageDecoder<ProductInfoPage>
         return true;
     }
 }
+
+/// <summary>Shared stateless common-page decoders, dispatched together against every message.</summary>
+internal static class CommonDataPageDecoders
+{
+    private static readonly BatteryStatusDecoder Battery = new();
+    private static readonly ManufacturerInfoDecoder Manufacturer = new();
+    private static readonly ProductInfoDecoder Product = new();
+
+    internal static void TryDispatch(
+        ReadOnlySpan<byte> page8,
+        Action<BatteryStatusPage> onBattery,
+        Action<ManufacturerInfoPage> onManufacturer,
+        Action<ProductInfoPage> onProduct)
+    {
+        if (Battery.TryDecode(page8, out var battery)) onBattery(battery);
+        if (Manufacturer.TryDecode(page8, out var manufacturer)) onManufacturer(manufacturer);
+        if (Product.TryDecode(page8, out var product)) onProduct(product);
+    }
+}

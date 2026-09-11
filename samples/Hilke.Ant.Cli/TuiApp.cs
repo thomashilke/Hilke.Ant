@@ -176,7 +176,7 @@ public static class TuiApp
                 : "--";
             string rssi = e.Rssi is { } r ? $"{r}dBm" : "--";
             rows.Add($"{Pad(name, 12)} {Pad(e.ProfileName, 6)} {Pad(state, 12)} " +
-                     $"{Pad(ProfileCatalog.FormatPrimary(e), 18)} batt:{Pad(batt, 10)} {rssi}");
+                     $"{Pad(DeviceDisplay.FormatPrimary(e), 18)} batt:{Pad(batt, 10)} {rssi}");
         }
         _deviceList.SetSource(rows);
     }

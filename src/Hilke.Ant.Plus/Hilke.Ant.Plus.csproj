@@ -2,4 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Hilke.Ant\Hilke.Ant.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hilke.Ant.Tests" />
+  </ItemGroup>
 </Project>

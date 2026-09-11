@@ -1,13 +1,12 @@
-using Hilke.Ant.Model;
 using Hilke.Ant.Plus;
 
 namespace Hilke.Ant.Cli;
 
 /// <summary>
-/// Wraps one <see cref="AntDevice"/>: owns the scan session and per-connection receive loops and
-/// enforces the hardware scan &lt;-&gt; channel mutual exclusion. Each channel's single-consumer
-/// <c>ReceiveAsync</c> stream is drained by exactly one loop, which dispatches pages to the decoders
-/// via <see cref="ProfileCatalog.Update"/>.
+/// Wraps one <see cref="AntPlusNode"/>: owns the scan session and every connected profile, and
+/// enforces the hardware scan &lt;-&gt; channel mutual exclusion. Each connected profile pumps its
+/// own messages; this session only tracks the mapping from token to profile and mirrors telemetry
+/// into the <see cref="DeviceRegistry"/>.
 /// </summary>
 public sealed class AntSession : IAsyncDisposable
 {
@@ -15,26 +14,25 @@ public sealed class AntSession : IAsyncDisposable
 
     private sealed class Connection
     {
-        public required AntChannel Channel { get; init; }
-        public required CancellationTokenSource Cts { get; init; }
-        public required EventHandler<ChannelStateChangedEventArgs> StateHandler { get; init; }
-        public PowerMeterCalibrationSession? Calibration { get; init; }
+        public required IAntPlusProfileConnection Profile { get; init; }
+        public required EventHandler<AntPlusChannelStateChangedEventArgs> StateHandler { get; init; }
+        public required EventHandler<AntPlusTelemetryUpdate> TelemetryHandler { get; init; }
     }
 
-    private readonly AntDevice _device;
+    private readonly AntPlusNode _node;
     private readonly DeviceRegistry _registry;
     private readonly Action<string> _log;
     private readonly object _gate = new();
     private readonly Dictionary<string, Connection> _connections = new(StringComparer.Ordinal);
 
     private Mode _mode = Mode.Idle;
-    private ScanSession? _scan;
+    private AntPlusScanSession? _scan;
     private CancellationTokenSource? _scanCts;
     private bool _disposed;
 
-    public AntSession(AntDevice device, DeviceRegistry registry, Action<string> log)
+    public AntSession(AntPlusNode node, DeviceRegistry registry, Action<string> log)
     {
-        _device = device ?? throw new ArgumentNullException(nameof(device));
+        _node = node ?? throw new ArgumentNullException(nameof(node));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _log = log ?? throw new ArgumentNullException(nameof(log));
     }
@@ -62,7 +60,7 @@ public sealed class AntSession : IAsyncDisposable
                 throw new InvalidOperationException("Disconnect all devices before scanning.");
         }
 
-        var scan = await _device.StartScanAsync(new ScanConfiguration()).ConfigureAwait(false);
+        var scan = await _node.StartScanAsync().ConfigureAwait(false);
         var cts = new CancellationTokenSource();
         lock (_gate)
         {
@@ -74,20 +72,20 @@ public sealed class AntSession : IAsyncDisposable
         _log("Scanning for ANT+ devices.");
     }
 
-    private async Task RunScanLoop(ScanSession scan, CancellationToken ct)
+    private async Task RunScanLoop(AntPlusScanSession scan, CancellationToken ct)
     {
         try
         {
-            await foreach (var m in scan.ReceiveAsync(ct).ConfigureAwait(false))
+            await foreach (var sighting in scan.ReceiveAsync(ct).ConfigureAwait(false))
             {
                 try
                 {
-                    var e = _registry.GetOrAdd(m.Device, ProfileCatalog.ProfileNameOrUnknown, ProfileCatalog.CreateDecoderSet);
+                    var e = _registry.GetOrAdd(sighting.DeviceId, sighting.ProfileName);
                     _registry.WithEntry(e.Token, x =>
                     {
-                        ProfileCatalog.Update(x, m.Payload.Span);
-                        x.Rssi = m.Rssi;
-                        x.LastSeen = DateTimeOffset.UtcNow;
+                        Apply(x, sighting.Telemetry);
+                        x.Rssi = sighting.Rssi;
+                        x.LastSeen = sighting.At;
                     });
                 }
                 catch (Exception ex)
@@ -108,7 +106,7 @@ public sealed class AntSession : IAsyncDisposable
 
     public async Task StopScanAsync()
     {
-        ScanSession? scan;
+        AntPlusScanSession? scan;
         CancellationTokenSource? cts;
         lock (_gate)
         {
@@ -143,89 +141,26 @@ public sealed class AntSession : IAsyncDisposable
         if (IsScanning)
             await StopScanAsync().ConfigureAwait(false);
 
-        var config = ProfileCatalog.BuildConfig(entry.DeviceType, entry.Id); // may throw NotSupportedException
-
-        byte channelNumber = AllocateChannel();
-        var channel = await _device.ConfigureChannelAsync(channelNumber, config).ConfigureAwait(false);
+        var profile = await _node.ConnectAsync(entry.Id).ConfigureAwait(false); // may throw NotSupportedException/AntPlusBusyException/AntPlusCommandException/AntPlusTimeoutException
 
         string tok = entry.Token;
-        EventHandler<ChannelStateChangedEventArgs> handler = (_, a) =>
-            _registry.WithEntry(tok, x => x.State = a.NewState);
-        channel.StateChanged += handler;
-
-        await channel.OpenAsync().ConfigureAwait(false);
-
-        var calibration = entry.DeviceType == BicyclePowerMonitor.DeviceType
-            ? new PowerMeterCalibrationSession(channel)
-            : null;
-
-        var cts = new CancellationTokenSource();
+        EventHandler<AntPlusChannelStateChangedEventArgs> stateHandler = (_, a) => _registry.WithEntry(tok, x => x.State = a.NewState);
+        EventHandler<AntPlusTelemetryUpdate> telemetryHandler = (_, u) => _registry.WithEntry(tok, x => { Apply(x, u); x.LastSeen = DateTimeOffset.UtcNow; });
+        profile.StateChanged += stateHandler;
+        profile.TelemetryUpdated += telemetryHandler;
         lock (_gate)
         {
-            _connections[tok] = new Connection { Channel = channel, Cts = cts, StateHandler = handler, Calibration = calibration };
+            _connections[tok] = new Connection { Profile = profile, StateHandler = stateHandler, TelemetryHandler = telemetryHandler };
             _mode = Mode.Connected;
         }
         _registry.WithEntry(tok, x =>
         {
             x.Connected = true;
-            x.ChannelNumber = channelNumber;
-            x.State = channel.State;
+            x.ChannelNumber = profile.ChannelNumber;
+            x.State = profile.State;
         });
-        _ = RunChannelLoop(tok, channel, calibration, cts.Token);
-        _log($"Connected {tok} ({entry.ProfileName}) on channel {channelNumber}.");
+        _log($"Connected {tok} ({entry.ProfileName}) on channel {profile.ChannelNumber}.");
         return entry;
-    }
-
-    private byte AllocateChannel()
-    {
-        byte max = _device.Capabilities.MaxChannels;
-        if (max == 0)
-            max = 8; // conservative default before capabilities are known
-        lock (_gate)
-        {
-            var used = new HashSet<byte>();
-            foreach (var c in _connections.Values)
-                used.Add(c.Channel.ChannelNumber);
-            for (byte n = 1; n < max; n++)
-            {
-                if (!used.Contains(n))
-                    return n;
-            }
-        }
-        throw new InvalidOperationException("All channels in use.");
-    }
-
-    private async Task RunChannelLoop(string token, AntChannel channel, PowerMeterCalibrationSession? calibration, CancellationToken ct)
-    {
-        try
-        {
-            await foreach (var m in channel.ReceiveAsync(ct).ConfigureAwait(false))
-            {
-                calibration?.HandleData(m.Payload.Span, m.ReceivedAt);
-                try
-                {
-                    _registry.WithEntry(token, x =>
-                    {
-                        ProfileCatalog.Update(x, m.Payload.Span);
-                        if (m.Rssi is { } r)
-                            x.Rssi = r;
-                        x.LastSeen = DateTimeOffset.UtcNow;
-                    });
-                }
-                catch (Exception ex)
-                {
-                    _log($"{token} decode error: {ex.Message}");
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // disconnected
-        }
-        catch (Exception ex)
-        {
-            _log($"{token} loop ended: {ex.Message}");
-        }
     }
 
     public async Task DisconnectAsync(string token)
@@ -250,11 +185,9 @@ public sealed class AntSession : IAsyncDisposable
             return;
         }
 
-        conn.Cts.Cancel();
         try
         {
-            await conn.Channel.CloseAsync().ConfigureAwait(false);
-            await conn.Channel.UnassignAsync().ConfigureAwait(false);
+            await _node.DisconnectAsync(conn.Profile).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -262,9 +195,8 @@ public sealed class AntSession : IAsyncDisposable
         }
         finally
         {
-            conn.Channel.StateChanged -= conn.StateHandler;
-            await conn.Channel.DisposeAsync().ConfigureAwait(false);
-            conn.Cts.Dispose();
+            conn.Profile.StateChanged -= conn.StateHandler;
+            conn.Profile.TelemetryUpdated -= conn.TelemetryHandler;
         }
 
         lock (_gate)
@@ -277,7 +209,7 @@ public sealed class AntSession : IAsyncDisposable
         {
             e.Connected = false;
             e.ChannelNumber = null;
-            e.State = ChannelState.Unconfigured;
+            e.State = AntPlusChannelState.Unconfigured;
         });
         _log($"Disconnected {tok}.");
     }
@@ -285,29 +217,29 @@ public sealed class AntSession : IAsyncDisposable
     // ----- FE-C control -----
 
     public Task SetTargetPowerAsync(string token, ushort watts)
-        => SendControlAsync(token, FitnessEquipmentMonitor.BuildTargetPowerPage(watts), $"target power {watts} W");
+        => SendControlAsync(token, (fe, ct) => fe.SetTargetPowerAsync(watts, ct), $"target power {watts} W");
 
     public Task SetBasicResistanceAsync(string token, double percent)
-        => SendControlAsync(token, FitnessEquipmentMonitor.BuildBasicResistancePage(percent), $"resistance {percent:F0}%");
+        => SendControlAsync(token, (fe, ct) => fe.SetBasicResistanceAsync(percent, ct), $"resistance {percent:F0}%");
 
-    private async Task SendControlAsync(string token, byte[] page, string what)
+    private async Task SendControlAsync(string token, Func<FitnessEquipmentMonitor, CancellationToken, Task> op, string what)
     {
-        Connection conn;
+        FitnessEquipmentMonitor fe;
         string tok;
         lock (_gate)
         {
             if (!_registry.TryResolve(token, out var e) || !_connections.TryGetValue(e.Token, out var c))
                 throw new InvalidOperationException($"Device '{token}' is not connected.");
-            if (e.DeviceType != FitnessEquipmentMonitor.DeviceType)
+            if (c.Profile is not FitnessEquipmentMonitor m)
                 throw new InvalidOperationException($"'{e.Token}' is not an FE-C trainer.");
-            conn = c;
+            fe = m;
             tok = e.Token;
         }
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try
         {
-            await conn.Channel.SendAcknowledgedAsync(page, cts.Token).ConfigureAwait(false);
+            await op(fe, cts.Token).ConfigureAwait(false);
             _log($"{tok}: {what} acknowledged.");
         }
         catch (OperationCanceledException)
@@ -319,24 +251,38 @@ public sealed class AntSession : IAsyncDisposable
     // ----- Bicycle Power calibration -----
 
     public Task<PowerMeterCalibrationResult> RequestManualZeroAsync(string token, TimeSpan timeout)
-        => RunCalibrationAsync(token, s => s.RequestManualZeroAsync(timeout));
+        => RunCalibrationAsync(token, (bp, ct) => bp.RequestManualZeroAsync(timeout, ct));
 
     public Task<PowerMeterCalibrationResult> ConfigureAutoZeroAsync(string token, bool enable, TimeSpan timeout)
-        => RunCalibrationAsync(token, s => s.ConfigureAutoZeroAsync(enable, timeout));
+        => RunCalibrationAsync(token, (bp, ct) => bp.ConfigureAutoZeroAsync(enable, timeout, ct));
 
     private Task<PowerMeterCalibrationResult> RunCalibrationAsync(
-        string token, Func<PowerMeterCalibrationSession, Task<PowerMeterCalibrationResult>> op)
+        string token, Func<BicyclePowerMonitor, CancellationToken, Task<PowerMeterCalibrationResult>> op)
     {
-        PowerMeterCalibrationSession session;
+        BicyclePowerMonitor monitor;
         lock (_gate)
         {
             if (!_registry.TryResolve(token, out var e) || !_connections.TryGetValue(e.Token, out var c))
                 throw new InvalidOperationException($"Device '{token}' is not connected.");
-            if (c.Calibration is null)
+            if (c.Profile is not BicyclePowerMonitor m)
                 throw new InvalidOperationException($"'{e.Token}' is not a bicycle power meter.");
-            session = c.Calibration;
+            monitor = m;
         }
-        return op(session);
+        return op(monitor, default);
+    }
+
+    private static void Apply(TrackedDeviceEntry x, AntPlusTelemetryUpdate u)
+    {
+        if (u.HeartRate is { } hr) x.HeartRate = hr;
+        if (u.PowerWatts is { } pw) x.PowerWatts = pw;
+        if (u.AveragePower is { } avg) x.AveragePower = avg;
+        if (u.Cadence is { } cad) x.Cadence = cad;
+        if (u.SpeedMps is { } sp) x.SpeedMps = sp;
+        if (u.TrainerStatus is { } ts) x.TrainerStatus = ts;
+        if (u.Battery is { } bs) x.Battery = bs;
+        if (u.BatteryVolts is { } bv) x.BatteryVolts = bv;
+        if (u.Manufacturer is { } mfg) x.Manufacturer = mfg;
+        if (u.Product is { } prod) x.Product = prod;
     }
 
     public async ValueTask DisposeAsync()
@@ -346,7 +292,7 @@ public sealed class AntSession : IAsyncDisposable
         _disposed = true;
 
         List<Connection> conns;
-        ScanSession? scan;
+        AntPlusScanSession? scan;
         CancellationTokenSource? scanCts;
         lock (_gate)
         {
@@ -368,12 +314,9 @@ public sealed class AntSession : IAsyncDisposable
 
         foreach (var c in conns)
         {
-            c.Cts.Cancel();
-            try { await c.Channel.CloseAsync().ConfigureAwait(false); } catch { /* best effort */ }
-            try { await c.Channel.DisposeAsync().ConfigureAwait(false); } catch { /* best effort */ }
-            c.Cts.Dispose();
+            try { await _node.DisconnectAsync(c.Profile).ConfigureAwait(false); } catch { /* best effort */ }
         }
 
-        await _device.DisposeAsync().ConfigureAwait(false);
+        await _node.DisposeAsync().ConfigureAwait(false);
     }
 }

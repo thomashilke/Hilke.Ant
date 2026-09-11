@@ -1,5 +1,4 @@
 using System.Globalization;
-using Hilke.Ant.Model;
 using Hilke.Ant.Plus;
 
 namespace Hilke.Ant.Cli;
@@ -11,14 +10,14 @@ namespace Hilke.Ant.Cli;
 /// </summary>
 public sealed class TrackedDeviceEntry
 {
-    public ChannelId Id { get; set; }
+    public AntPlusDeviceId Id { get; set; }
     public string Token { get; set; } = "";
     public string? Alias { get; set; }
     public byte DeviceType { get; set; }
     public string ProfileName { get; set; } = "";
     public bool Connected { get; set; }
     public byte? ChannelNumber { get; set; }
-    public ChannelState State { get; set; } = ChannelState.Configured;
+    public AntPlusChannelState State { get; set; } = AntPlusChannelState.Configured;
 
     public int? HeartRate { get; set; }
     public int? PowerWatts { get; set; }
@@ -34,10 +33,7 @@ public sealed class TrackedDeviceEntry
     public ProductInfoPage? Product { get; set; }
     public DateTimeOffset LastSeen { get; set; }
 
-    /// <summary>Per-entry decoder set (from <see cref="ProfileCatalog.CreateDecoderSet"/>).</summary>
-    public object DecoderState { get; set; } = null!;
-
-    /// <summary>Shallow copy for lock-free rendering (value fields; shares the decoder-state reference).</summary>
+    /// <summary>Shallow copy for lock-free rendering.</summary>
     internal TrackedDeviceEntry Clone() => (TrackedDeviceEntry)MemberwiseClone();
 }
 
@@ -50,10 +46,10 @@ public sealed class DeviceRegistry
     private readonly Dictionary<string, TrackedDeviceEntry> _entries = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Return the entry for <paramref name="id"/>, creating it (with profile name + decoder set) on
-    /// first sight. Always refreshes <see cref="TrackedDeviceEntry.LastSeen"/>.
+    /// Return the entry for <paramref name="id"/>, creating it (with profile name) on first sight.
+    /// Always refreshes <see cref="TrackedDeviceEntry.LastSeen"/>.
     /// </summary>
-    public TrackedDeviceEntry GetOrAdd(ChannelId id, Func<byte, string> profileName, Func<byte, object> decoderFactory)
+    public TrackedDeviceEntry GetOrAdd(AntPlusDeviceId id, string profileName)
     {
         lock (_gate)
         {
@@ -69,17 +65,16 @@ public sealed class DeviceRegistry
                 Id = id,
                 Token = token,
                 DeviceType = id.DeviceType,
-                ProfileName = profileName(id.DeviceType),
-                State = ChannelState.Configured,
+                ProfileName = profileName,
+                State = AntPlusChannelState.Configured,
                 LastSeen = DateTimeOffset.UtcNow,
-                DecoderState = decoderFactory(id.DeviceType),
             };
             _entries[token] = entry;
             return entry;
         }
     }
 
-    private string TokenForLocked(ChannelId id)
+    private string TokenForLocked(AntPlusDeviceId id)
     {
         string baseToken = id.DeviceNumber.ToString(CultureInfo.InvariantCulture);
         if (_entries.TryGetValue(baseToken, out var existing) && existing.DeviceType != id.DeviceType)
