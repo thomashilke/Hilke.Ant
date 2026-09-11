@@ -1,4 +1,8 @@
 using System.Runtime.CompilerServices;
+using Hilke.Ant.Plus.Common;
+using Hilke.Ant.Plus.HeartRate;
+using Hilke.Ant.Plus.BicyclePower;
+using Hilke.Ant.Plus.FitnessEquipment;
 
 namespace Hilke.Ant.Plus;
 
@@ -17,6 +21,7 @@ public sealed class AntPlusScanSession : IAsyncDisposable
 
     internal AntPlusScanSession(ScanSession scan) => _scan = scan;
 
+    /// <summary>Stream every device sighting discovered while the scan is running.</summary>
     public async IAsyncEnumerable<AntPlusDeviceSighting> ReceiveAsync([EnumeratorCancellation] CancellationToken ct = default)
     {
         await foreach (var m in _scan.ReceiveAsync(ct).ConfigureAwait(false))
@@ -28,7 +33,9 @@ public sealed class AntPlusScanSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Stop the scan.</summary>
     public Task StopAsync(CancellationToken ct = default) => _scan.StopAsync(ct);
+    /// <summary>Stop the scan and release the underlying channel.</summary>
     public ValueTask DisposeAsync() => _scan.DisposeAsync();
 
     /// <summary>Per-device stateful decoder set + telemetry dispatch, keyed by device type. Private:

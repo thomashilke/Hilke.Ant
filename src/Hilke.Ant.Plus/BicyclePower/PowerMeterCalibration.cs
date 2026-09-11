@@ -1,25 +1,36 @@
 using Hilke.Ant;
 using Hilke.Ant.Model;
+using Hilke.Ant.Plus.Common;
 
-namespace Hilke.Ant.Plus;
+namespace Hilke.Ant.Plus.BicyclePower;
 
 /// <summary>Lifecycle state of a <see cref="PowerMeterCalibrationSession"/> request.</summary>
 public enum PowerMeterCalibrationState
 {
+    /// <summary>No calibration request is in progress.</summary>
     Idle,
+    /// <summary>The calibration request page is being sent.</summary>
     SendingRequest,
+    /// <summary>The request was sent; waiting for the sensor's response page.</summary>
     AwaitingResponse,
+    /// <summary>The sensor responded with success.</summary>
     Succeeded,
+    /// <summary>The sensor responded with failure.</summary>
     Failed,
+    /// <summary>No response arrived before the timeout elapsed.</summary>
     TimedOut,
 }
 
 /// <summary>Terminal outcome of a calibration request.</summary>
 public enum CalibrationOutcome
 {
+    /// <summary>The sensor confirmed a successful calibration.</summary>
     Success,
+    /// <summary>The sensor rejected the calibration request.</summary>
     Failed,
+    /// <summary>No response arrived before the timeout elapsed.</summary>
     TimedOut,
+    /// <summary>The acknowledged request itself failed to transmit.</summary>
     TransmitFailed,
 }
 
@@ -51,7 +62,7 @@ public readonly record struct PowerMeterCalibrationResult(
 /// Decodes the ANT+ common calibration page (0x01), surfacing only sensor-originated
 /// response ids (success 0xAC / fail 0xAF); request ids and other pages are rejected.
 /// </summary>
-public sealed class CalibrationDecoder : IDataPageDecoder<CalibrationResponse>
+internal sealed class CalibrationDecoder : IDataPageDecoder<CalibrationResponse>
 {
     /// <summary>Common calibration data page number.</summary>
     public const byte Page = 0x01;

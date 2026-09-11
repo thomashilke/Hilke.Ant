@@ -2,8 +2,9 @@ using System.Threading.Channels;
 using Hilke.Ant;
 using Hilke.Ant.Model;
 using Hilke.Ant.Protocol;
+using Hilke.Ant.Plus.Common;
 
-namespace Hilke.Ant.Plus;
+namespace Hilke.Ant.Plus.BicyclePower;
 
 /// <summary>
 /// A decoded ANT+ Bicycle Power standard power-only page (0x10). <see cref="AveragePower"/> is
@@ -23,7 +24,7 @@ public readonly record struct BicyclePowerReading(
 /// Stateful decoder for the ANT+ Bicycle Power "standard power-only" page (0x10). Retains the
 /// previous event count / accumulated power to compute average power (watts) across messages.
 /// </summary>
-public sealed class BicyclePowerDecoder : IDataPageDecoder<BicyclePowerReading>
+internal sealed class BicyclePowerDecoder : IDataPageDecoder<BicyclePowerReading>
 {
     /// <summary>Standard power-only data page number.</summary>
     public const byte PowerOnlyPage = 0x10;
@@ -103,10 +104,15 @@ public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
         _pump = Task.Run(() => PumpAsync(_pumpCts.Token));
     }
 
+    /// <summary>The connected device's identity.</summary>
     public AntPlusDeviceId DeviceId { get; }
+    /// <summary>The ANT channel number assigned to this connection.</summary>
     public byte ChannelNumber => _channel.ChannelNumber;
+    /// <summary>The connection's current channel lifecycle state.</summary>
     public AntPlusChannelState State => _channel.State.ToPlus();
+    /// <summary>Raised on every channel lifecycle state transition.</summary>
     public event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
+    /// <summary>Raised for every decoded telemetry update (power plus any common pages).</summary>
     public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
 
     private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
@@ -175,6 +181,7 @@ public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
         finally { _readings.Writer.TryComplete(); }
     }
 
+    /// <summary>Stop the background pump and gracefully close/unassign/dispose the underlying channel.</summary>
     public async ValueTask DisposeAsync()
     {
         _channel.StateChanged -= OnChannelStateChanged;

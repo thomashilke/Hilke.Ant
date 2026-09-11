@@ -1,4 +1,4 @@
-using Hilke.Ant.Plus;
+using Hilke.Ant.Plus.BicyclePower;
 using Xunit;
 
 namespace Hilke.Ant.Tests;

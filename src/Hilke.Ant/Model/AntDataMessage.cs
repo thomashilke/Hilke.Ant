@@ -3,7 +3,7 @@ using Hilke.Ant.Protocol;
 namespace Hilke.Ant.Model;
 
 /// <summary>A received data message surfaced to consumers.</summary>
-public class AntDataMessage
+internal class AntDataMessage
 {
     public AntDataMessage(ChannelId? deviceId, DataKind kind, ReadOnlyMemory<byte> payload, sbyte? rssi, DateTimeOffset receivedAt)
     {
@@ -25,7 +25,7 @@ public class AntDataMessage
 }
 
 /// <summary>A scan-mode data message; <see cref="AntDataMessage.DeviceId"/> is always present.</summary>
-public sealed class ScanDataMessage : AntDataMessage
+internal sealed class ScanDataMessage : AntDataMessage
 {
     public ScanDataMessage(ChannelId deviceId, DataKind kind, ReadOnlyMemory<byte> payload, sbyte? rssi, DateTimeOffset receivedAt)
         : base(deviceId, kind, payload, rssi, receivedAt)

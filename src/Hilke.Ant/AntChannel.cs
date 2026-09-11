@@ -9,7 +9,7 @@ namespace Hilke.Ant;
 /// A single ANT channel: maps RF events + inactivity onto the library lifecycle
 /// <see cref="ChannelState"/> and exposes RX as an async stream plus master TX.
 /// </summary>
-public sealed class AntChannel : IAsyncDisposable
+internal sealed class AntChannel : IAsyncDisposable
 {
     private readonly AntDevice _device;
     private readonly Channel<AntDataMessage> _rx = System.Threading.Channels.Channel.CreateUnbounded<AntDataMessage>(

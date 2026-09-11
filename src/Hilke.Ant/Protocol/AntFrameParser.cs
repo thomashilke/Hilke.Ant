@@ -5,7 +5,7 @@ namespace Hilke.Ant.Protocol;
 /// complete messages with <see cref="TryReadMessage"/>. Handles partial frames across appends,
 /// scans for SYNC on garbage, and drops frames failing length/checksum by skipping one byte.
 /// </summary>
-public sealed class AntFrameParser
+internal sealed class AntFrameParser
 {
     private byte[] _buffer;
     private int _start; // index of first unconsumed byte

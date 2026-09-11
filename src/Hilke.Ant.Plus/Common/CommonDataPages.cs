@@ -1,15 +1,23 @@
-namespace Hilke.Ant.Plus;
+namespace Hilke.Ant.Plus.Common;
 
 /// <summary>ANT+ common battery status (page 0x52, descriptor high nibble).</summary>
 public enum BatteryStatus : byte
 {
+    /// <summary>No battery status reported.</summary>
     Unknown = 0,
+    /// <summary>Battery is new.</summary>
     New = 1,
+    /// <summary>Battery charge is good.</summary>
     Good = 2,
+    /// <summary>Battery charge is ok.</summary>
     Ok = 3,
+    /// <summary>Battery charge is low.</summary>
     Low = 4,
+    /// <summary>Battery charge is critical.</summary>
     Critical = 5,
+    /// <summary>Reserved value.</summary>
     Reserved = 6,
+    /// <summary>The status field is invalid.</summary>
     Invalid = 7,
 }
 
@@ -23,7 +31,7 @@ public readonly record struct BatteryStatusPage(
     DateTimeOffset At) : IAntPlusDataPage;
 
 /// <summary>Decoder for the ANT+ common Battery Status page (0x52).</summary>
-public sealed class BatteryStatusDecoder : IDataPageDecoder<BatteryStatusPage>
+internal sealed class BatteryStatusDecoder : IDataPageDecoder<BatteryStatusPage>
 {
     /// <summary>Common Battery Status page number.</summary>
     public const byte Page = 0x52;
@@ -57,7 +65,7 @@ public readonly record struct ManufacturerInfoPage(
     DateTimeOffset At) : IAntPlusDataPage;
 
 /// <summary>Decoder for the ANT+ common Manufacturer's Information page (0x50).</summary>
-public sealed class ManufacturerInfoDecoder : IDataPageDecoder<ManufacturerInfoPage>
+internal sealed class ManufacturerInfoDecoder : IDataPageDecoder<ManufacturerInfoPage>
 {
     /// <summary>Common Manufacturer's Information page number.</summary>
     public const byte Page = 0x50;
@@ -85,7 +93,7 @@ public readonly record struct ProductInfoPage(
     DateTimeOffset At) : IAntPlusDataPage;
 
 /// <summary>Decoder for the ANT+ common Product Information page (0x51).</summary>
-public sealed class ProductInfoDecoder : IDataPageDecoder<ProductInfoPage>
+internal sealed class ProductInfoDecoder : IDataPageDecoder<ProductInfoPage>
 {
     /// <summary>Common Product Information page number.</summary>
     public const byte Page = 0x51;

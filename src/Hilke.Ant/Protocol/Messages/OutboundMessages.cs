@@ -3,7 +3,7 @@ using Hilke.Ant.Model;
 namespace Hilke.Ant.Protocol.Messages;
 
 /// <summary>Pure encoders producing complete frame bytes for outbound (host → device) messages.</summary>
-public static class OutboundMessages
+internal static class OutboundMessages
 {
     public static byte[] AssignChannel(byte channel, ChannelType type, byte network)
         => AntFrame.Encode(AntMessageId.AssignChannel, stackalloc byte[] { channel, (byte)type, network });

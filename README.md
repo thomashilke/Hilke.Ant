@@ -7,7 +7,7 @@ raw ANT protocol bytes:
 | Project | Purpose |
 |---|---|
 | `src/Hilke.Ant` | Core ANT protocol: device/channel lifecycle, scan sessions, framing. Not ANT+-aware. |
-| `src/Hilke.Ant.Plus` | The public surface: `AntPlusNode`, per-profile monitors (`HeartRateMonitor`, `BicyclePowerMonitor`, `FitnessEquipmentMonitor`), calibration. |
+| `src/Hilke.Ant.Plus` | The public surface: `AntPlusNode` (+ node-management types) in `Hilke.Ant.Plus`, each profile isolated in its own subnamespace — `Hilke.Ant.Plus.HeartRate`, `.BicyclePower` (+ calibration), `.FitnessEquipment` — and shared common-page decoding in `Hilke.Ant.Plus.Common`. |
 | `src/Hilke.Ant.Transport.Serial` | `SerialAntTransport` — opens the USB dongle (`COMx` / `/dev/ttyUSBx`). |
 | `src/Hilke.Ant.Testing` | `InMemoryAntTransport` + `SimulatedAntRadio`, a deterministic device double used by the tests and `--simulate` mode. |
 | `tests/Hilke.Ant.Tests` | Unit + integration tests. |
@@ -40,6 +40,8 @@ await foreach (var sighting in scan.ReceiveAsync())
 ### Connect to a heart rate monitor and stream readings
 
 ```csharp
+using Hilke.Ant.Plus.HeartRate;
+
 var id = new AntPlusDeviceId(DeviceNumber: 12345, DeviceType: HeartRateMonitor.DeviceType, TransmissionType: 1);
 await using var hrm = (HeartRateMonitor)await node.ConnectAsync(id);
 
@@ -57,7 +59,10 @@ await foreach (var reading in hrm.ReadingsAsync())
 - **Three profiles implemented**: heart rate, bicycle power (with manual-zero/auto-zero
   calibration), and FE-C (trainer control limited to target-power and basic-resistance pages —
   no track/wind resistance, capabilities, or user-configuration pages). Other ANT+ device
-  profiles aren't decoded.
+  profiles aren't decoded. `SetTargetPowerAsync`/`SetBasicResistanceAsync` completing only means
+  the command bytes reached the trainer's radio — it does not mean the trainer accepted or
+  applied them. Subscribe to `CommandStatusReceived` to see the trainer's own FE-C-level
+  confirmation (page 0x47: pass/fail/not-supported/rejected); some trainers never send one.
 - **One radio, one mode at a time**: the underlying dongle can either scan or have channels open,
   not both, and only one scan session runs at a time. `AntPlusNode.ConnectAsync` /
   `StartScanAsync` throw `AntPlusBusyException` if that invariant is violated — callers must stop

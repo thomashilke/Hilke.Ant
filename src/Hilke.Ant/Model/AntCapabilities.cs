@@ -1,7 +1,7 @@
 namespace Hilke.Ant.Model;
 
 /// <summary>Device capabilities reported by the Capabilities (0x54) message.</summary>
-public sealed record AntCapabilities(
+internal sealed record AntCapabilities(
     byte MaxChannels,
     byte MaxNetworks,
     byte StandardOptions,

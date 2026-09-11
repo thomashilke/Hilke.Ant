@@ -160,7 +160,10 @@ public static class TuiApp
             copy = _logLines.ToArray();
         _logList.SetSource(copy);
         if (copy.Length > 0)
+        {
             _logList.SelectedItem = copy.Length - 1;
+            _logList.EnsureSelectedItemVisible();
+        }
     }
 
     private static void RefreshDevices()

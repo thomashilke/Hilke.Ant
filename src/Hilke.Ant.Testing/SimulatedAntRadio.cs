@@ -22,6 +22,7 @@ public sealed class SimulatedAntRadio : IAsyncDisposable
     private bool _extRxEnabled;
     private bool _disposed;
 
+    /// <summary>Create a simulated radio driving the given in-memory transport.</summary>
     public SimulatedAntRadio(InMemoryAntTransport transport, byte maxChannels = 8, byte maxNetworks = 3)
     {
         _transport = transport;
@@ -31,7 +32,9 @@ public sealed class SimulatedAntRadio : IAsyncDisposable
         _loop = Task.Run(() => RunAsync(_cts.Token));
     }
 
+    /// <summary>The number of channels this simulated radio reports in its Capabilities message.</summary>
     public byte MaxChannels { get; }
+    /// <summary>The number of networks this simulated radio reports in its Capabilities message.</summary>
     public byte MaxNetworks { get; }
 
     /// <summary>The 8-byte data page of the most recent acknowledged-data message from the host.</summary>
@@ -251,6 +254,7 @@ public sealed class SimulatedAntRadio : IAsyncDisposable
     private void RespondLocked(byte channel, AntMessageId toId, ChannelResponseCode code)
         => Respond(channel, toId, code);
 
+    /// <summary>Stop the simulated radio's background read loop.</summary>
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;

@@ -3,7 +3,7 @@ using Hilke.Ant.Model;
 namespace Hilke.Ant.Protocol.Messages;
 
 /// <summary>Channel Response / Event (0x40): DATA = [channel, responseToId, code].</summary>
-public readonly struct ChannelResponse
+internal readonly struct ChannelResponse
 {
     public ChannelResponse(byte channel, AntMessageId responseToId, ChannelResponseCode code)
     {
@@ -21,7 +21,7 @@ public readonly struct ChannelResponse
 }
 
 /// <summary>A received data message (0x4E broadcast, 0x4F acknowledged, 0x50 burst).</summary>
-public readonly struct ReceivedData
+internal readonly struct ReceivedData
 {
     public ReceivedData(byte channel, DataKind kind, byte[] payload, ChannelId? extendedId, sbyte? rssi, ushort? rxTimestamp)
     {
@@ -44,14 +44,14 @@ public readonly struct ReceivedData
 }
 
 /// <summary>Startup message (0x6F): a single flags byte describing the reset reason.</summary>
-public readonly struct Startup
+internal readonly struct Startup
 {
     public Startup(byte flags) => Flags = flags;
     public byte Flags { get; }
 }
 
 /// <summary>Capabilities message (0x54).</summary>
-public readonly struct CapabilitiesMessage
+internal readonly struct CapabilitiesMessage
 {
     public CapabilitiesMessage(byte maxChannels, byte maxNetworks, byte standardOptions, byte advancedOptions)
     {
@@ -68,7 +68,7 @@ public readonly struct CapabilitiesMessage
 }
 
 /// <summary>Channel Status message (0x52): low 2 bits of the status byte are the device state.</summary>
-public readonly struct ChannelStatusMessage
+internal readonly struct ChannelStatusMessage
 {
     public ChannelStatusMessage(byte channel, DeviceChannelState state)
     {
@@ -81,7 +81,7 @@ public readonly struct ChannelStatusMessage
 }
 
 /// <summary>Channel Id message (0x51).</summary>
-public readonly struct ChannelIdMessage
+internal readonly struct ChannelIdMessage
 {
     public ChannelIdMessage(byte channel, ChannelId id)
     {
@@ -94,7 +94,7 @@ public readonly struct ChannelIdMessage
 }
 
 /// <summary>Parsers producing typed results from raw <see cref="AntMessage"/> values.</summary>
-public static class InboundMessages
+internal static class InboundMessages
 {
     public static ChannelResponse ParseChannelResponse(AntMessage msg)
     {

@@ -1,6 +1,9 @@
 using Hilke.Ant.Cli;
 using Hilke.Ant.Model;
 using Hilke.Ant.Plus;
+using Hilke.Ant.Plus.Common;
+using Hilke.Ant.Plus.BicyclePower;
+using Hilke.Ant.Plus.FitnessEquipment;
 using Hilke.Ant.Protocol;
 using Hilke.Ant.Testing;
 using Xunit;
@@ -35,13 +38,13 @@ public class CliTests
     }
 
     // ----- integration helpers -----
-    private static async Task<(AntPlusNode node, SimulatedAntRadio sim, DeviceRegistry registry, AntSession session)> BuildAsync()
+    private static async Task<(AntPlusNode node, SimulatedAntRadio sim, DeviceRegistry registry, AntSession session)> BuildAsync(Action<string>? log = null)
     {
         var transport = new InMemoryAntTransport();
         var sim = new SimulatedAntRadio(transport);
         var node = await AntPlusNode.OpenAsync(transport);
         var registry = new DeviceRegistry();
-        var session = new AntSession(node, registry, _ => { });
+        var session = new AntSession(node, registry, log ?? (_ => { }));
         return (node, sim, registry, session);
     }
 
@@ -127,9 +130,45 @@ public class CliTests
         var t = session.SetTargetPowerAsync(entry.Token, 250);
         await Task.Delay(50); // let the sim record the acknowledged page
         sim.InjectEvent(ch, ChannelResponseCode.EventTransferTxCompleted);
+
+        // Confirm at the FE-C application level too (Command Status page 0x47), so the call
+        // resolves immediately instead of waiting out the no-confirmation timeout.
+        byte[] passStatus = { 0x47, FitnessEquipmentMonitor.TargetPowerPage, 0x01, (byte)FitnessEquipmentCommandStatus.Pass, 0xFF, 0xFF, 0xFF, 0xFF };
+        var deviceId = new ChannelId(33333, 17, 5);
+        await WaitAsync(() => { sim.InjectBroadcast(ch, deviceId, passStatus); return t.IsCompleted; });
         await t;
 
         Assert.Equal(FitnessEquipmentMonitor.BuildTargetPowerPage(250), sim.LastAcknowledgedPage);
+    }
+
+    [Fact]
+    public async Task SetTargetPower_ReportsWhenTrainerRejectsCommand()
+    {
+        // Reproduces the reported bug: the CLI used to print "acknowledged" for every ANT-level
+        // radio ack, even when the trainer's own FE-C application rejected the command (e.g. it
+        // doesn't support ERG/target-power mode) and never actually changed the effective power.
+        var log = new List<string>();
+        var (_, sim, registry, session) = await BuildAsync(s => { lock (log) log.Add(s); });
+        await using var _ = session;
+
+        var plusId = new AntPlusDeviceId(33333, 17, 5);
+        var entry = registry.GetOrAdd(plusId, AntPlusDeviceCatalog.ProfileName(plusId.DeviceType));
+        await session.ConnectAsync(entry.Token);
+        byte ch = entry.ChannelNumber!.Value;
+
+        var t = session.SetTargetPowerAsync(entry.Token, 250);
+        await Task.Delay(50);
+        sim.InjectEvent(ch, ChannelResponseCode.EventTransferTxCompleted);
+
+        byte[] notSupportedStatus = { 0x47, FitnessEquipmentMonitor.TargetPowerPage, 0x01, (byte)FitnessEquipmentCommandStatus.NotSupported, 0xFF, 0xFF, 0xFF, 0xFF };
+        var deviceId = new ChannelId(33333, 17, 5);
+        await WaitAsync(() => { sim.InjectBroadcast(ch, deviceId, notSupportedStatus); return t.IsCompleted; });
+        await t;
+
+        string line;
+        lock (log) line = log.Single(l => l.Contains("target power"));
+        Assert.Contains("not supported by trainer", line);
+        Assert.DoesNotContain("acknowledged", line);
     }
 
     // ----- Bicycle Power calibration -----

@@ -1,4 +1,5 @@
 using Hilke.Ant.Plus;
+using Hilke.Ant.Plus.HeartRate;
 using Hilke.Ant.Transport.Serial;
 
 // Manual hardware demo: connect an ANTUSB-m stick and run with the COM/tty port name.

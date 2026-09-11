@@ -1,7 +1,7 @@
 namespace Hilke.Ant.Model;
 
 /// <summary>Raised when a channel transitions between library-level states.</summary>
-public sealed class ChannelStateChangedEventArgs : EventArgs
+internal sealed class ChannelStateChangedEventArgs : EventArgs
 {
     public ChannelStateChangedEventArgs(ChannelState oldState, ChannelState newState)
     {

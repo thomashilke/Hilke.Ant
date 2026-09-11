@@ -2,23 +2,31 @@ using System.Threading.Channels;
 using Hilke.Ant;
 using Hilke.Ant.Model;
 using Hilke.Ant.Protocol;
+using Hilke.Ant.Plus.Common;
 
-namespace Hilke.Ant.Plus;
+namespace Hilke.Ant.Plus.FitnessEquipment;
 
 /// <summary>The FE-C page kind surfaced in a <see cref="FitnessEquipmentUpdate"/>.</summary>
 public enum FitnessEquipmentPage : byte
 {
+    /// <summary>General FE Data page (0x10).</summary>
     GeneralData = 0x10,
+    /// <summary>Specific Trainer Data page (0x19).</summary>
     SpecificTrainerData = 0x19,
 }
 
 /// <summary>FE state reported in the high nibble of the general/trainer flags byte.</summary>
 public enum FitnessEquipmentState : byte
 {
+    /// <summary>Reserved/unknown state.</summary>
     Reserved = 0,
+    /// <summary>The equipment is asleep or powered off.</summary>
     AsleepOff = 1,
+    /// <summary>The equipment is ready but not yet in use.</summary>
     Ready = 2,
+    /// <summary>The equipment is actively in use.</summary>
     InUse = 3,
+    /// <summary>The equipment has finished/paused a session.</summary>
     Finished = 4,
 }
 
@@ -50,7 +58,7 @@ public readonly record struct FitnessEquipmentUpdate(
     TrainerData? Trainer);
 
 /// <summary>Decoder for the FE-C General FE Data page (0x10).</summary>
-public sealed class GeneralFitnessDataDecoder : IDataPageDecoder<GeneralFitnessData>
+internal sealed class GeneralFitnessDataDecoder : IDataPageDecoder<GeneralFitnessData>
 {
     public const byte Page = 0x10;
 
@@ -77,7 +85,7 @@ public sealed class GeneralFitnessDataDecoder : IDataPageDecoder<GeneralFitnessD
 }
 
 /// <summary>Decoder for the FE-C Specific Trainer Data page (0x19).</summary>
-public sealed class TrainerDataDecoder : IDataPageDecoder<TrainerData>
+internal sealed class TrainerDataDecoder : IDataPageDecoder<TrainerData>
 {
     public const byte Page = 0x19;
 
@@ -102,6 +110,56 @@ public sealed class TrainerDataDecoder : IDataPageDecoder<TrainerData>
 }
 
 /// <summary>
+/// Acceptance status of the last control command the FE received, from the Command Status page
+/// (0x47). This is the FE's own application-level acknowledgement — distinct from (and more
+/// meaningful than) the ANT radio-level acknowledged-transfer completion, which only confirms the
+/// bytes reached the device, not that the FE validated or applied them. Not every FE implements
+/// this page; if none arrives, treat the command as unconfirmed rather than assuming success.
+/// </summary>
+public enum FitnessEquipmentCommandStatus : byte
+{
+    /// <summary>The command was accepted and applied.</summary>
+    Pass = 0,
+    /// <summary>The command failed.</summary>
+    Fail = 1,
+    /// <summary>The FE does not support this command.</summary>
+    NotSupported = 2,
+    /// <summary>The command was rejected (e.g. out of range, wrong mode/sequence).</summary>
+    Rejected = 3,
+    /// <summary>The command is still being processed.</summary>
+    Pending = 4,
+    /// <summary>No command has been received yet, or the status is not otherwise known.</summary>
+    Uninitialized = 0xFF,
+}
+
+/// <summary>ANT+ FE-C Command Status page (0x47): the FE's acknowledgement of the last control command it received.</summary>
+public readonly record struct FitnessEquipmentCommandResult(
+    byte LastReceivedCommandId,
+    byte SequenceNumber,
+    FitnessEquipmentCommandStatus Status,
+    DateTimeOffset At);
+
+/// <summary>Decoder for the FE-C Command Status page (0x47).</summary>
+internal sealed class CommandStatusDecoder : IDataPageDecoder<FitnessEquipmentCommandResult>
+{
+    public const byte Page = 0x47;
+
+    public bool TryDecode(ReadOnlySpan<byte> payload8, out FitnessEquipmentCommandResult reading)
+    {
+        reading = default;
+        if (payload8.Length < 8 || (payload8[0] & 0x7F) != Page)
+            return false;
+
+        reading = new FitnessEquipmentCommandResult(
+            payload8[1],
+            payload8[2],
+            (FitnessEquipmentCommandStatus)payload8[3],
+            DateTimeOffset.UtcNow);
+        return true;
+    }
+}
+
+/// <summary>
 /// Reference ANT+ profile: wraps an <see cref="AntChannel"/> as an FE-C controller (slave that
 /// also transmits control pages), decodes general + trainer pages, and can command the trainer.
 /// </summary>
@@ -116,12 +174,15 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
     /// <summary>ANT+ managed network number.</summary>
     public const byte AntPlusNetwork = AntPlusProtocol.NetworkNumber;
 
-    private const byte BasicResistancePage = 0x30;
-    private const byte TargetPowerPage = 0x31;
+    /// <summary>FE-C Basic Resistance control page number (0x30); also the value <see cref="FitnessEquipmentCommandResult.LastReceivedCommandId"/> echoes back for it.</summary>
+    public const byte BasicResistancePage = 0x30;
+    /// <summary>FE-C Target Power control page number (0x31); also the value <see cref="FitnessEquipmentCommandResult.LastReceivedCommandId"/> echoes back for it.</summary>
+    public const byte TargetPowerPage = 0x31;
 
     private readonly AntChannel _channel;
     private readonly GeneralFitnessDataDecoder _general = new();
     private readonly TrainerDataDecoder _trainer = new();
+    private readonly CommandStatusDecoder _commandStatus = new();
     private readonly Channel<FitnessEquipmentUpdate> _readings = System.Threading.Channels.Channel.CreateBounded<FitnessEquipmentUpdate>(
         new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = false, SingleWriter = true });
     private readonly CancellationTokenSource _pumpCts;
@@ -136,13 +197,26 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
         _pump = Task.Run(() => PumpAsync(_pumpCts.Token));
     }
 
+    /// <summary>Raised for each decoded FE-C General FE Data page.</summary>
     public event EventHandler<GeneralFitnessData>? GeneralDataReceived;
+    /// <summary>Raised for each decoded FE-C Specific Trainer Data page.</summary>
     public event EventHandler<TrainerData>? TrainerDataReceived;
+    /// <summary>
+    /// Raised for each decoded FE-C Command Status page (0x47): the FE's own confirmation of the
+    /// last control command it received. Not every FE sends this page — see
+    /// <see cref="FitnessEquipmentCommandStatus"/>.
+    /// </summary>
+    public event EventHandler<FitnessEquipmentCommandResult>? CommandStatusReceived;
 
+    /// <summary>The connected device's identity.</summary>
     public AntPlusDeviceId DeviceId { get; }
+    /// <summary>The ANT channel number assigned to this connection.</summary>
     public byte ChannelNumber => _channel.ChannelNumber;
+    /// <summary>The connection's current channel lifecycle state.</summary>
     public AntPlusChannelState State => _channel.State.ToPlus();
+    /// <summary>Raised on every channel lifecycle state transition.</summary>
     public event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
+    /// <summary>Raised for every decoded telemetry update (speed/power/heart rate plus any common pages).</summary>
     public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
 
     private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
@@ -188,6 +262,8 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
                     if (trainer.InstantaneousPower is { } ip)
                         update = update with { PowerWatts = ip };
                 }
+                if (_commandStatus.TryDecode(span, out var commandStatus))
+                    CommandStatusReceived?.Invoke(this, commandStatus);
                 CommonDataPageDecoders.TryDispatch(span,
                     b => update = (update ?? new AntPlusTelemetryUpdate()) with { Battery = b.Status, BatteryVolts = b.Voltage },
                     m => update = (update ?? new AntPlusTelemetryUpdate()) with { Manufacturer = m },
@@ -222,6 +298,7 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
     public Task SetBasicResistanceAsync(double percent, CancellationToken ct = default)
         => _channel.SendAcknowledgedAsync(BuildBasicResistancePage(percent), ct);
 
+    /// <summary>Stop the background pump and gracefully close/unassign/dispose the underlying channel.</summary>
     public async ValueTask DisposeAsync()
     {
         _channel.StateChanged -= OnChannelStateChanged;

@@ -1,4 +1,6 @@
-using Hilke.Ant.Plus;
+using Hilke.Ant.Plus.HeartRate;
+using Hilke.Ant.Plus.BicyclePower;
+using Hilke.Ant.Plus.FitnessEquipment;
 
 namespace Hilke.Ant.Cli;
 

@@ -2,6 +2,9 @@ using Hilke.Ant.Protocol;
 using Hilke.Ant.Cli;
 using Hilke.Ant.Model;
 using Hilke.Ant.Plus;
+using Hilke.Ant.Plus.HeartRate;
+using Hilke.Ant.Plus.BicyclePower;
+using Hilke.Ant.Plus.FitnessEquipment;
 using Hilke.Ant.Testing;
 using Hilke.Ant.Transport.Serial;
 using Terminal.Gui;
@@ -136,8 +139,13 @@ internal static class SimFeed
                             break;
                         case FitnessEquipmentMonitor.DeviceType:
                             sim.InjectBroadcast(ch, Fec, tick % 2 == 0 ? fecGeneral : fecTrainer, rssi: -70);
-                            // Complete any pending acknowledged control transfer.
+                            // Complete any pending acknowledged control transfer, then confirm it at
+                            // the FE-C application level via a Command Status page (0x47), echoing
+                            // back the command just sent so `power`/`resistance` report a real status
+                            // instead of only the radio-level ack.
                             sim.InjectEvent(ch, Hilke.Ant.Protocol.ChannelResponseCode.EventTransferTxCompleted);
+                            if (sim.LastAcknowledgedPage is { Length: > 0 } lastCommand)
+                                sim.InjectBroadcast(ch, Fec, new byte[] { 0x47, lastCommand[0], 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF }, rssi: -70);
                             break;
                     }
                 }

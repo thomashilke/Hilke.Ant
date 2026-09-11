@@ -2,8 +2,9 @@ using System.Threading.Channels;
 using Hilke.Ant;
 using Hilke.Ant.Model;
 using Hilke.Ant.Protocol;
+using Hilke.Ant.Plus.Common;
 
-namespace Hilke.Ant.Plus;
+namespace Hilke.Ant.Plus.HeartRate;
 
 /// <summary>A single decoded ANT+ heart rate reading (common page fields).</summary>
 public readonly record struct HeartRateReading(
@@ -14,7 +15,7 @@ public readonly record struct HeartRateReading(
     DateTimeOffset At) : IAntPlusDataPage;
 
 /// <summary>Decoder for the ANT+ HRM common data-page fields.</summary>
-public sealed class HeartRatePageDecoder : IDataPageDecoder<HeartRateReading>
+internal sealed class HeartRatePageDecoder : IDataPageDecoder<HeartRateReading>
 {
     public bool TryDecode(ReadOnlySpan<byte> payload8, out HeartRateReading reading)
     {
@@ -66,10 +67,15 @@ public sealed class HeartRateMonitor : IAntPlusProfileConnection
     /// <summary>Raised for each decoded heart rate reading.</summary>
     public event EventHandler<HeartRateReading>? HeartRateChanged;
 
+    /// <summary>The connected device's identity.</summary>
     public AntPlusDeviceId DeviceId { get; }
+    /// <summary>The ANT channel number assigned to this connection.</summary>
     public byte ChannelNumber => _channel.ChannelNumber;
+    /// <summary>The connection's current channel lifecycle state.</summary>
     public AntPlusChannelState State => _channel.State.ToPlus();
+    /// <summary>Raised on every channel lifecycle state transition.</summary>
     public event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
+    /// <summary>Raised for every decoded telemetry update (heart rate plus any common pages).</summary>
     public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
 
     private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
@@ -117,6 +123,7 @@ public sealed class HeartRateMonitor : IAntPlusProfileConnection
         finally { _readings.Writer.TryComplete(); }
     }
 
+    /// <summary>Stop the background pump and gracefully close/unassign/dispose the underlying channel.</summary>
     public async ValueTask DisposeAsync()
     {
         _channel.StateChanged -= OnChannelStateChanged;

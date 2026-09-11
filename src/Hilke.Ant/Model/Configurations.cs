@@ -3,7 +3,7 @@ using Hilke.Ant.Protocol;
 namespace Hilke.Ant.Model;
 
 /// <summary>Library-level channel lifecycle state (distinct from device <see cref="DeviceChannelState"/>).</summary>
-public enum ChannelState
+internal enum ChannelState
 {
     Unconfigured,
     Configured,
@@ -14,7 +14,7 @@ public enum ChannelState
 }
 
 /// <summary>Immutable configuration applied when assigning/opening a channel.</summary>
-public sealed record ChannelConfiguration
+internal sealed record ChannelConfiguration
 {
     public required ChannelType Type { get; init; }
     public byte NetworkNumber { get; init; }
@@ -34,7 +34,7 @@ public sealed record ChannelConfiguration
 }
 
 /// <summary>Configuration for a continuous-scan session (Open Rx Scan Mode, channel 0).</summary>
-public sealed record ScanConfiguration
+internal sealed record ScanConfiguration
 {
     public byte NetworkNumber { get; init; }
     public byte RfFrequency { get; init; }

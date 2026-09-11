@@ -8,9 +8,14 @@ namespace Hilke.Ant.Plus;
 /// </summary>
 public interface IAntPlusProfileConnection : IAsyncDisposable
 {
+    /// <summary>The connected device's identity.</summary>
     AntPlusDeviceId DeviceId { get; }
+    /// <summary>The ANT channel number assigned to this connection.</summary>
     byte ChannelNumber { get; }
+    /// <summary>The connection's current channel lifecycle state.</summary>
     AntPlusChannelState State { get; }
+    /// <summary>Raised on every channel lifecycle state transition.</summary>
     event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
+    /// <summary>Raised for every decoded telemetry update.</summary>
     event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
 }

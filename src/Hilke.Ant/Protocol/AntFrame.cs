@@ -1,7 +1,7 @@
 namespace Hilke.Ant.Protocol;
 
 /// <summary>A decoded ANT message: its id and the raw DATA payload (excluding sync/length/checksum).</summary>
-public readonly struct AntMessage
+internal readonly struct AntMessage
 {
     public AntMessage(AntMessageId id, ReadOnlyMemory<byte> payload)
     {
@@ -16,7 +16,7 @@ public readonly struct AntMessage
 }
 
 /// <summary>Encoding + checksum helpers for the ANT frame: SYNC | LENGTH | MSG_ID | DATA | CHECKSUM.</summary>
-public static class AntFrame
+internal static class AntFrame
 {
     /// <summary>Overhead bytes around DATA: SYNC + LENGTH + MSG_ID + CHECKSUM.</summary>
     public const int Overhead = 4;

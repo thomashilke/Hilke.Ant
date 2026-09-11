@@ -1,5 +1,8 @@
 using Hilke.Ant.Model;
 using Hilke.Ant.Transport;
+using Hilke.Ant.Plus.HeartRate;
+using Hilke.Ant.Plus.BicyclePower;
+using Hilke.Ant.Plus.FitnessEquipment;
 
 namespace Hilke.Ant.Plus;
 
@@ -16,6 +19,7 @@ public sealed class AntPlusNode : IAsyncDisposable
 
     private AntPlusNode(AntDevice device) => _device = device;
 
+    /// <summary>Open the transport and program it onto the ANT+ managed network. Owns the transport thereafter.</summary>
     public static async Task<AntPlusNode> OpenAsync(IAntTransport transport, CancellationToken ct = default)
     {
         var device = new AntDevice(transport);
@@ -29,6 +33,7 @@ public sealed class AntPlusNode : IAsyncDisposable
         return new AntPlusNode(device);
     }
 
+    /// <summary>Start a continuous scan for nearby ANT+ devices. Requires no connected devices.</summary>
     public async Task<AntPlusScanSession> StartScanAsync(CancellationToken ct = default)
     {
         try
@@ -39,6 +44,7 @@ public sealed class AntPlusNode : IAsyncDisposable
         catch (RadioBusyException ex) { throw new AntPlusBusyException(ex.Message); }
     }
 
+    /// <summary>Connect to a discovered device, returning its profile-specific connection. The caller must stop any active scan first.</summary>
     public async Task<IAntPlusProfileConnection> ConnectAsync(AntPlusDeviceId id, CancellationToken ct = default)
     {
         byte channelNumber;
@@ -73,6 +79,7 @@ public sealed class AntPlusNode : IAsyncDisposable
         return profile;
     }
 
+    /// <summary>Gracefully disconnect and dispose a connection previously returned by <see cref="ConnectAsync"/>.</summary>
     public async Task DisconnectAsync(IAntPlusProfileConnection connection, CancellationToken ct = default)
     {
         try { await connection.DisposeAsync().ConfigureAwait(false); }
@@ -88,5 +95,6 @@ public sealed class AntPlusNode : IAsyncDisposable
         throw new InvalidOperationException("All channels in use.");
     }
 
+    /// <summary>Dispose the underlying ANT device and its transport.</summary>
     public async ValueTask DisposeAsync() => await _device.DisposeAsync().ConfigureAwait(false);
 }

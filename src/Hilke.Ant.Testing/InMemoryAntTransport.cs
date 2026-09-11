@@ -16,20 +16,24 @@ public sealed class InMemoryAntTransport : IAntTransport
 
     private bool _open;
 
+    /// <summary>Whether the transport currently has an open connection to the device.</summary>
     public bool IsOpen => _open;
 
+    /// <summary>Open the transport.</summary>
     public ValueTask OpenAsync(CancellationToken ct = default)
     {
         _open = true;
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>Write one complete, already-framed ANT message; the simulator will observe it.</summary>
     public ValueTask WriteAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default)
     {
         _toSim.Writer.TryWrite(frame.ToArray());
         return ValueTask.CompletedTask;
     }
 
+    /// <summary>Read bytes previously sent by the simulator into <paramref name="buffer"/>. Returns 0 when closed.</summary>
     public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
     {
         try
@@ -46,6 +50,7 @@ public sealed class InMemoryAntTransport : IAntTransport
         }
     }
 
+    /// <summary>Close the transport.</summary>
     public ValueTask CloseAsync(CancellationToken ct = default)
     {
         _open = false;
@@ -62,6 +67,7 @@ public sealed class InMemoryAntTransport : IAntTransport
     /// <summary>Enqueue a frame to be delivered to the host's read loop.</summary>
     internal void SendToHost(byte[] frame) => _toHost.Writer.TryWrite(frame);
 
+    /// <summary>Close the transport and release its queues.</summary>
     public ValueTask DisposeAsync()
     {
         _open = false;

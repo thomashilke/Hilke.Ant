@@ -12,7 +12,7 @@ namespace Hilke.Ant;
 /// The ANT radio: owns the transport, a single background read loop, the write/command pipeline,
 /// and the scan/channel mutual-exclusion guard.
 /// </summary>
-public sealed class AntDevice : IAsyncDisposable
+internal sealed class AntDevice : IAsyncDisposable
 {
     private enum RadioMode { Idle, Channels, Scanning }
 

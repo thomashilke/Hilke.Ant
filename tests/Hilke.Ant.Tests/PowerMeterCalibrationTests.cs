@@ -1,6 +1,6 @@
 using Hilke.Ant;
 using Hilke.Ant.Model;
-using Hilke.Ant.Plus;
+using Hilke.Ant.Plus.BicyclePower;
 using Hilke.Ant.Protocol;
 using Hilke.Ant.Testing;
 using Xunit;

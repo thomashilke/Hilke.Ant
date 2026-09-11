@@ -1,4 +1,6 @@
 using Hilke.Ant.Plus;
+using Hilke.Ant.Plus.BicyclePower;
+using Hilke.Ant.Plus.FitnessEquipment;
 
 namespace Hilke.Ant.Cli;
 
@@ -217,12 +219,12 @@ public sealed class AntSession : IAsyncDisposable
     // ----- FE-C control -----
 
     public Task SetTargetPowerAsync(string token, ushort watts)
-        => SendControlAsync(token, (fe, ct) => fe.SetTargetPowerAsync(watts, ct), $"target power {watts} W");
+        => SendControlAsync(token, FitnessEquipmentMonitor.TargetPowerPage, (fe, ct) => fe.SetTargetPowerAsync(watts, ct), $"target power {watts} W");
 
     public Task SetBasicResistanceAsync(string token, double percent)
-        => SendControlAsync(token, (fe, ct) => fe.SetBasicResistanceAsync(percent, ct), $"resistance {percent:F0}%");
+        => SendControlAsync(token, FitnessEquipmentMonitor.BasicResistancePage, (fe, ct) => fe.SetBasicResistanceAsync(percent, ct), $"resistance {percent:F0}%");
 
-    private async Task SendControlAsync(string token, Func<FitnessEquipmentMonitor, CancellationToken, Task> op, string what)
+    private async Task SendControlAsync(string token, byte commandPageId, Func<FitnessEquipmentMonitor, CancellationToken, Task> op, string what)
     {
         FitnessEquipmentMonitor fe;
         string tok;
@@ -236,17 +238,46 @@ public sealed class AntSession : IAsyncDisposable
             tok = e.Token;
         }
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        // The ANT-level ack below only confirms the bytes reached the trainer's radio, not that the
+        // FE-C application accepted them; subscribe for the trainer's own Command Status page (0x47)
+        // first so a fast reply can't race the subscription.
+        var statusTcs = new TaskCompletionSource<FitnessEquipmentCommandStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<FitnessEquipmentCommandResult> onStatus = (_, r) =>
+        {
+            if (r.LastReceivedCommandId == commandPageId)
+                statusTcs.TrySetResult(r.Status);
+        };
+        fe.CommandStatusReceived += onStatus;
         try
         {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             await op(fe, cts.Token).ConfigureAwait(false);
-            _log($"{tok}: {what} acknowledged.");
+
+            using var statusCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            using var reg = statusCts.Token.Register(() => statusTcs.TrySetResult(FitnessEquipmentCommandStatus.Uninitialized));
+            var status = await statusTcs.Task.ConfigureAwait(false);
+            _log($"{tok}: {what} -> {FormatCommandStatus(status)}.");
         }
         catch (OperationCanceledException)
         {
             _log($"{tok}: no acknowledgement from trainer for {what}.");
         }
+        finally
+        {
+            fe.CommandStatusReceived -= onStatus;
+        }
     }
+
+    private static string FormatCommandStatus(FitnessEquipmentCommandStatus status) => status switch
+    {
+        FitnessEquipmentCommandStatus.Pass => "accepted by trainer",
+        FitnessEquipmentCommandStatus.Fail => "rejected by trainer (fail)",
+        FitnessEquipmentCommandStatus.NotSupported => "not supported by trainer",
+        FitnessEquipmentCommandStatus.Rejected => "rejected by trainer",
+        FitnessEquipmentCommandStatus.Pending => "pending",
+        FitnessEquipmentCommandStatus.Uninitialized => "sent, but trainer did not confirm (no command-status page received)",
+        _ => "sent",
+    };
 
     // ----- Bicycle Power calibration -----
 

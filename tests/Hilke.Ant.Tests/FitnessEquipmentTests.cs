@@ -1,7 +1,7 @@
 using Hilke.Ant;
 using Hilke.Ant.Protocol;
 using Hilke.Ant.Model;
-using Hilke.Ant.Plus;
+using Hilke.Ant.Plus.FitnessEquipment;
 using Hilke.Ant.Testing;
 using Xunit;
 
@@ -85,6 +85,28 @@ public class FitnessEquipmentTests
     }
 
     [Fact]
+    public void CommandStatusDecoder_DecodesLastCommandAndStatus()
+    {
+        var decoder = new CommandStatusDecoder();
+        // page 0x47, last command 0x31 (Target Power), sequence 3, status 0 (Pass), response data reserved.
+        byte[] page = { 0x47, 0x31, 0x03, 0x00, 0xFF, 0xFF, 0xFF, 0xFF };
+
+        Assert.True(decoder.TryDecode(page, out var r));
+        Assert.Equal(FitnessEquipmentMonitor.TargetPowerPage, r.LastReceivedCommandId);
+        Assert.Equal((byte)3, r.SequenceNumber);
+        Assert.Equal(FitnessEquipmentCommandStatus.Pass, r.Status);
+    }
+
+    [Fact]
+    public void CommandStatusDecoder_RejectsWrongPage()
+    {
+        var decoder = new CommandStatusDecoder();
+        byte[] page = { 0x10, 0x31, 0x03, 0x00, 0xFF, 0xFF, 0xFF, 0xFF };
+
+        Assert.False(decoder.TryDecode(page, out _));
+    }
+
+    [Fact]
     public async Task SetTargetPower_SendsAcknowledgedControlPage()
     {
         var transport = new InMemoryAntTransport();
@@ -105,5 +127,51 @@ public class FitnessEquipmentTests
             Assert.NotNull(sim.LastAcknowledgedPage);
             Assert.Equal(FitnessEquipmentMonitor.BuildTargetPowerPage(250), sim.LastAcknowledgedPage);
         }
+    }
+
+    [Fact]
+    public async Task ConnectedMonitor_RaisesCommandStatusReceived_ForMatchingCommand()
+    {
+        var transport = new InMemoryAntTransport();
+        var sim = new SimulatedAntRadio(transport);
+        var device = new AntDevice(transport) { CommandTimeout = TimeSpan.FromMilliseconds(300) };
+        await using (device)
+        await using (sim)
+        {
+            await device.OpenAsync();
+            var channel = await device.ConfigureChannelAsync(0, FitnessEquipmentMonitor.SlaveDefaults());
+            await channel.OpenAsync();
+            var fe = new FitnessEquipmentMonitor(channel);
+
+            FitnessEquipmentCommandResult? received = null;
+            fe.CommandStatusReceived += (_, r) => received = r;
+
+            var send = fe.SetTargetPowerAsync(150);
+            sim.InjectEvent(0, ChannelResponseCode.EventTransferTxCompleted);
+            await send;
+
+            byte[] statusPage = { 0x47, FitnessEquipmentMonitor.TargetPowerPage, 0x01, (byte)FitnessEquipmentCommandStatus.NotSupported, 0xFF, 0xFF, 0xFF, 0xFF };
+            var deviceId = new ChannelId(1, FitnessEquipmentMonitor.DeviceType, 5);
+            bool ok = await WaitForAsync(() =>
+            {
+                sim.InjectBroadcast(0, deviceId, statusPage);
+                return received is not null;
+            });
+
+            Assert.True(ok);
+            Assert.Equal(FitnessEquipmentMonitor.TargetPowerPage, received!.Value.LastReceivedCommandId);
+            Assert.Equal(FitnessEquipmentCommandStatus.NotSupported, received.Value.Status);
+        }
+    }
+
+    private static async Task<bool> WaitForAsync(Func<bool> condition, int attempts = 100, int delayMs = 10)
+    {
+        for (int i = 0; i < attempts; i++)
+        {
+            if (condition())
+                return true;
+            await Task.Delay(delayMs);
+        }
+        return condition();
     }
 }

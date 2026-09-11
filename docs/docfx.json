@@ -1,0 +1,40 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../src",
+          "files": [
+            "Hilke.Ant/Hilke.Ant.csproj",
+            "Hilke.Ant.Plus/Hilke.Ant.Plus.csproj",
+            "Hilke.Ant.Testing/Hilke.Ant.Testing.csproj",
+            "Hilke.Ant.Transport.Serial/Hilke.Ant.Transport.Serial.csproj"
+          ]
+        }
+      ],
+      "dest": "api",
+      "includePrivateMembers": false,
+      "namespaceLayout": "flattened",
+      "memberLayout": "samePage"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": [ "api/**.yml", "api/index.md" ]
+      },
+      {
+        "files": [ "*.md", "toc.yml" ]
+      }
+    ],
+    "resource": [],
+    "output": "_site",
+    "template": [ "default", "modern" ],
+    "globalMetadata": {
+      "_appName": "Hilke.Ant",
+      "_appTitle": "Hilke.Ant API",
+      "_enableSearch": true
+    },
+    "markdownEngineName": "markdig"
+  }
+}

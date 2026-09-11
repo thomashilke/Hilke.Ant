@@ -9,7 +9,7 @@ namespace Hilke.Ant;
 /// A continuous-scan (Open Rx Scan Mode) session. Monopolizes the radio on channel 0 and
 /// surfaces every extended broadcast, each carrying a distinguishing <see cref="ChannelId"/>.
 /// </summary>
-public sealed class ScanSession : IAsyncDisposable
+internal sealed class ScanSession : IAsyncDisposable
 {
     private readonly AntDevice _device;
     private readonly Channel<ScanDataMessage> _rx = System.Threading.Channels.Channel.CreateUnbounded<ScanDataMessage>(

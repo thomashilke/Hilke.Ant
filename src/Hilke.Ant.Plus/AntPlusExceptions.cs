@@ -3,6 +3,7 @@ namespace Hilke.Ant.Plus;
 /// <summary>Base type for every exception observable from a public <c>Hilke.Ant.Plus</c> API.</summary>
 public abstract class AntPlusException : Exception
 {
+    /// <summary>Create the exception with the given message.</summary>
     protected AntPlusException(string message) : base(message) { }
 }
 

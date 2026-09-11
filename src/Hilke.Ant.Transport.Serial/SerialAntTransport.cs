@@ -13,17 +13,20 @@ public sealed class SerialAntTransport : IAntTransport
     private readonly int _baudRate;
     private SerialPort? _port;
 
+    /// <summary>Create a transport for the given serial port name, not yet opened.</summary>
     public SerialAntTransport(string portName, int baudRate = 115200)
     {
         _portName = portName ?? throw new ArgumentNullException(nameof(portName));
         _baudRate = baudRate;
     }
 
+    /// <summary>Whether the serial port currently has an open connection to the device.</summary>
     public bool IsOpen => _port?.IsOpen ?? false;
 
     /// <summary>Enumerate available serial ports.</summary>
     public static string[] GetPortNames() => SerialPort.GetPortNames();
 
+    /// <summary>Open the serial port.</summary>
     public ValueTask OpenAsync(CancellationToken ct = default)
     {
         if (IsOpen)
@@ -64,6 +67,7 @@ public sealed class SerialAntTransport : IAntTransport
         }
     }
 
+    /// <summary>Write one complete, already-framed ANT message to the device.</summary>
     public async ValueTask WriteAsync(ReadOnlyMemory<byte> frame, CancellationToken ct = default)
     {
         var stream = RequireStream();
@@ -71,6 +75,7 @@ public sealed class SerialAntTransport : IAntTransport
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>Read bytes from the device into <paramref name="buffer"/>. Returns 0 when the port is closed.</summary>
     public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
     {
         var port = _port;
@@ -91,6 +96,7 @@ public sealed class SerialAntTransport : IAntTransport
         }
     }
 
+    /// <summary>Close the serial port.</summary>
     public ValueTask CloseAsync(CancellationToken ct = default)
     {
         if (_port is { IsOpen: true } port)
@@ -106,6 +112,7 @@ public sealed class SerialAntTransport : IAntTransport
         return port.BaseStream;
     }
 
+    /// <summary>Close and dispose the serial port.</summary>
     public ValueTask DisposeAsync()
     {
         _port?.Dispose();
