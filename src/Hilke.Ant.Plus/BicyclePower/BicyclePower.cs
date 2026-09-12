@@ -116,7 +116,7 @@ public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
     public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
 
     private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
-        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus()));
+        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus(), e.Reason.ToPlus()));
 
     /// <summary>The power-meter calibration session driven by this monitor's read pump.</summary>
     public PowerMeterCalibrationSession Calibration => _calibration;

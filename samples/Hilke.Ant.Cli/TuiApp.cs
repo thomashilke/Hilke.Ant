@@ -173,7 +173,7 @@ public static class TuiApp
         foreach (var e in snapshot)
         {
             string name = e.Alias is { } a ? $"{e.Token}/{a}" : e.Token;
-            string state = e.Connected ? e.State.ToString() : "visible";
+            string state = DeviceDisplay.FormatState(e);
             string batt = e.Battery is { } b
                 ? $"{b}{(e.BatteryVolts is { } v ? $" {v:F1}V" : "")}"
                 : "--";

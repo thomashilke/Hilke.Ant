@@ -19,6 +19,7 @@ public sealed class TrackedDeviceEntry
     public bool Connected { get; set; }
     public byte? ChannelNumber { get; set; }
     public AntPlusChannelState State { get; set; } = AntPlusChannelState.Configured;
+    public AntPlusChannelTransitionReason? LastTransitionReason { get; set; }
 
     public int? HeartRate { get; set; }
     public int? PowerWatts { get; set; }

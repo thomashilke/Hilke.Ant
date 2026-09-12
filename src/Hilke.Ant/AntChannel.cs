@@ -55,7 +55,7 @@ internal sealed class AntChannel : IAsyncDisposable
         RequireState(ChannelState.Configured, nameof(OpenAsync));
         await _device.SendConfigAsync(AntMessageId.OpenChannel, OutboundMessages.OpenChannel(ChannelNumber), ct).ConfigureAwait(false);
         _device.RegisterChannelOpen();
-        Transition(ChannelState.Searching);
+        Transition(ChannelState.Searching, ChannelTransitionReason.Requested);
     }
 
     public async Task CloseAsync(CancellationToken ct = default)
@@ -66,7 +66,7 @@ internal sealed class AntChannel : IAsyncDisposable
             if (State is ChannelState.Unconfigured or ChannelState.Configured)
                 throw new InvalidChannelStateException(State, nameof(CloseAsync));
             _closeCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            SetStateLocked(ChannelState.Closing);
+            SetStateLocked(ChannelState.Closing, ChannelTransitionReason.Requested);
         }
         RaisePendingTransitions();
         await _device.SendConfigAsync(AntMessageId.CloseChannel, OutboundMessages.CloseChannel(ChannelNumber), ct).ConfigureAwait(false);
@@ -84,7 +84,7 @@ internal sealed class AntChannel : IAsyncDisposable
         ThrowIfDisposed();
         RequireState(ChannelState.Configured, nameof(UnassignAsync));
         await _device.SendConfigAsync(AntMessageId.UnassignChannel, OutboundMessages.UnassignChannel(ChannelNumber), ct).ConfigureAwait(false);
-        Transition(ChannelState.Unconfigured);
+        Transition(ChannelState.Unconfigured, ChannelTransitionReason.Requested);
         _device.RemoveChannel(ChannelNumber);
         _rx.Writer.TryComplete();
     }
@@ -168,11 +168,11 @@ internal sealed class AntChannel : IAsyncDisposable
 
         lock (_gate)
         {
-            if (State is ChannelState.Searching or ChannelState.Inactive)
+            if (State is ChannelState.Searching or ChannelState.Lost)
             {
                 if (id is ChannelId cid)
                     TrackedDevice = cid;
-                SetStateLocked(ChannelState.Active);
+                SetStateLocked(ChannelState.Tracking, ChannelTransitionReason.DataReceived);
             }
             ArmInactivityTimer();
         }
@@ -198,18 +198,21 @@ internal sealed class AntChannel : IAsyncDisposable
             case ChannelResponseCode.EventRxFailGoToSearch:
                 lock (_gate)
                 {
-                    if (State == ChannelState.Active)
-                        SetStateLocked(ChannelState.Inactive);
+                    if (State == ChannelState.Tracking)
+                        SetStateLocked(ChannelState.Lost, ChannelTransitionReason.DeviceLost);
                 }
                 RaisePendingTransitions();
                 break;
             case ChannelResponseCode.EventRxSearchTimeout:
-                Transition(ChannelState.Configured);
+                // Release the open-channel mutual exclusion before publishing the state
+                // transition: a consumer reacting to StateChanged (e.g. re-scanning once the
+                // channel frees up) must never observe a stale "channel is open" rejection.
                 _device.UnregisterChannelOpen();
+                Transition(ChannelState.Configured, ChannelTransitionReason.SearchTimedOut);
                 break;
             case ChannelResponseCode.EventChannelClosed:
-                Transition(ChannelState.Configured);
                 _device.UnregisterChannelOpen();
+                Transition(ChannelState.Configured, ChannelTransitionReason.Requested);
                 CompleteClose();
                 break;
             default:
@@ -240,9 +243,9 @@ internal sealed class AntChannel : IAsyncDisposable
         bool changed = false;
         lock (_gate)
         {
-            if (State == ChannelState.Active)
+            if (State == ChannelState.Tracking)
             {
-                SetStateLocked(ChannelState.Inactive);
+                SetStateLocked(ChannelState.Lost, ChannelTransitionReason.InactivityTimeout);
                 changed = true;
             }
         }
@@ -272,32 +275,32 @@ internal sealed class AntChannel : IAsyncDisposable
     }
 
     /// <summary>Transition outside the gate (acquires it), raising StateChanged after release.</summary>
-    private void Transition(ChannelState next)
+    private void Transition(ChannelState next, ChannelTransitionReason reason)
     {
         lock (_gate)
-            SetStateLocked(next);
+            SetStateLocked(next, reason);
         RaisePendingTransitions();
     }
 
     // Pending transition tuple captured under the gate, raised outside it to avoid re-entrancy.
-    private (ChannelState oldState, ChannelState newState)? _pendingTransition;
+    private (ChannelState oldState, ChannelState newState, ChannelTransitionReason reason)? _pendingTransition;
 
-    private ChannelState SetStateLocked(ChannelState next)
+    private ChannelState SetStateLocked(ChannelState next, ChannelTransitionReason reason)
     {
         if (State == next)
             return State;
         var old = State;
         State = next;
-        _pendingTransition = (old, next);
+        _pendingTransition = (old, next, reason);
         return next;
     }
 
     private void RaisePendingTransitions()
     {
-        (ChannelState oldState, ChannelState newState)? t;
+        (ChannelState oldState, ChannelState newState, ChannelTransitionReason reason)? t;
         lock (_gate) { t = _pendingTransition; _pendingTransition = null; }
         if (t is { } tr)
-            StateChanged?.Invoke(this, new ChannelStateChangedEventArgs(tr.oldState, tr.newState));
+            StateChanged?.Invoke(this, new ChannelStateChangedEventArgs(tr.oldState, tr.newState, tr.reason));
     }
 
     private void ThrowIfDisposed()
@@ -316,12 +319,12 @@ internal sealed class AntChannel : IAsyncDisposable
         {
             lock (_gate)
             {
-                if (State is ChannelState.Searching or ChannelState.Active or ChannelState.Inactive)
+                if (State is ChannelState.Searching or ChannelState.Tracking or ChannelState.Lost)
                 {
                     // best-effort close
                 }
             }
-            if (State is ChannelState.Searching or ChannelState.Active or ChannelState.Inactive)
+            if (State is ChannelState.Searching or ChannelState.Tracking or ChannelState.Lost)
             {
                 await _device.WriteFrameAsync(OutboundMessages.CloseChannel(ChannelNumber), CancellationToken.None).ConfigureAwait(false);
                 _device.UnregisterChannelOpen();

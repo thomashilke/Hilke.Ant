@@ -146,7 +146,7 @@ public sealed class AntSession : IAsyncDisposable
         var profile = await _node.ConnectAsync(entry.Id).ConfigureAwait(false); // may throw NotSupportedException/AntPlusBusyException/AntPlusCommandException/AntPlusTimeoutException
 
         string tok = entry.Token;
-        EventHandler<AntPlusChannelStateChangedEventArgs> stateHandler = (_, a) => _registry.WithEntry(tok, x => x.State = a.NewState);
+        EventHandler<AntPlusChannelStateChangedEventArgs> stateHandler = (_, a) => _registry.WithEntry(tok, x => { x.State = a.NewState; x.LastTransitionReason = a.Reason; });
         EventHandler<AntPlusTelemetryUpdate> telemetryHandler = (_, u) => _registry.WithEntry(tok, x => { Apply(x, u); x.LastSeen = DateTimeOffset.UtcNow; });
         profile.StateChanged += stateHandler;
         profile.TelemetryUpdated += telemetryHandler;
@@ -212,6 +212,7 @@ public sealed class AntSession : IAsyncDisposable
             e.Connected = false;
             e.ChannelNumber = null;
             e.State = AntPlusChannelState.Unconfigured;
+            e.LastTransitionReason = null;
         });
         _log($"Disconnected {tok}.");
     }

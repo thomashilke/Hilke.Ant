@@ -41,7 +41,7 @@ if (found is not { } id)
 await scan.StopAsync();
 
 await using var power = (BicyclePowerMonitor)await node.ConnectAsync(id);
-power.StateChanged += (_, e) => Console.WriteLine($"Channel: {e.OldState} -> {e.NewState}");
+power.StateChanged += (_, e) => Console.WriteLine($"Channel: {e.OldState} -> {e.NewState} ({e.Reason})");
 _ = ConsumeReadingsAsync(power, cts.Token);
 
 Console.WriteLine("Requesting manual-zero calibration ...");

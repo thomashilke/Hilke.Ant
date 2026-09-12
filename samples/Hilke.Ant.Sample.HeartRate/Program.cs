@@ -41,7 +41,7 @@ if (found is not { } id)
 await scan.StopAsync();
 
 await using var hrm = (HeartRateMonitor)await node.ConnectAsync(id);
-hrm.StateChanged += (_, e) => Console.WriteLine($"Channel: {e.OldState} -> {e.NewState}");
+hrm.StateChanged += (_, e) => Console.WriteLine($"Channel: {e.OldState} -> {e.NewState} ({e.Reason})");
 
 try
 {

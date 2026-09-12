@@ -107,7 +107,7 @@ public sealed class CommandProcessor
         foreach (var e in snapshot)
         {
             string name = e.Alias is { } a ? $"{e.Token} ({a})" : e.Token;
-            string state = e.Connected ? e.State.ToString() : "visible";
+            string state = DeviceDisplay.FormatState(e);
             _log($"{name}  {e.ProfileName}  {state}  {DeviceDisplay.FormatPrimary(e)}");
         }
     }
@@ -174,7 +174,7 @@ public sealed class CommandProcessor
         }
         _log($"Device {e.Token}{(e.Alias is { } a ? $" ({a})" : "")}");
         _log($"  id: number={e.Id.DeviceNumber} type={e.Id.DeviceType} tx={e.Id.TransmissionType}");
-        _log($"  profile: {e.ProfileName}   state: {(e.Connected ? e.State.ToString() : "visible")}" +
+        _log($"  profile: {e.ProfileName}   state: {DeviceDisplay.FormatState(e)}" +
              $"{(e.ChannelNumber is { } ch ? $"   channel: {ch}" : "")}");
         _log($"  telemetry: hr={Fmt(e.HeartRate)} power={Fmt(e.PowerWatts)}W avg={Fmt(e.AveragePower)}W " +
              $"cad={Fmt(e.Cadence)} speed={Fmt(e.SpeedMps)}m/s trainer={e.TrainerStatus ?? "--"}");

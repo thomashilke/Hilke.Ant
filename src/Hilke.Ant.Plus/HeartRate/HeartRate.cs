@@ -79,7 +79,7 @@ public sealed class HeartRateMonitor : IAntPlusProfileConnection
     public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
 
     private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
-        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus()));
+        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus(), e.Reason.ToPlus()));
 
     /// <summary>Default HRM slave channel configuration (device type 120, ANT+ freq/period).</summary>
     internal static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()

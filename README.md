@@ -45,7 +45,7 @@ using Hilke.Ant.Plus.HeartRate;
 var id = new AntPlusDeviceId(DeviceNumber: 12345, DeviceType: HeartRateMonitor.DeviceType, TransmissionType: 1);
 await using var hrm = (HeartRateMonitor)await node.ConnectAsync(id);
 
-hrm.StateChanged += (_, e) => Console.WriteLine($"{e.OldState} -> {e.NewState}");
+hrm.StateChanged += (_, e) => Console.WriteLine($"{e.OldState} -> {e.NewState} ({e.Reason})");
 
 await foreach (var reading in hrm.ReadingsAsync())
     Console.WriteLine($"{reading.ComputedHeartRate} bpm");
@@ -67,8 +67,10 @@ await foreach (var reading in hrm.ReadingsAsync())
   not both, and only one scan session runs at a time. `AntPlusNode.ConnectAsync` /
   `StartScanAsync` throw `AntPlusBusyException` if that invariant is violated — callers must stop
   scanning before connecting.
-- **No auto-reconnect**: a dropped device (`AntPlusChannelState.Inactive`/`Searching`) is surfaced
-  as a state event only; reconnecting after a real disconnect is the caller's responsibility.
+- **No auto-reconnect**: a dropped device (`AntPlusChannelState.Lost`, then `Searching`) is
+  surfaced as a state event only (with a `Reason` distinguishing a radio-confirmed loss from the
+  local inactivity-timeout heuristic, and an autonomous search-timeout closure from an explicit
+  one); reconnecting after a real disconnect is the caller's responsibility.
 - **Single transport per node**: one `AntPlusNode` talks to exactly one USB stick; there's no
   built-in multi-dongle coordination.
 - **No persistence**: nothing is cached across process restarts — the CLI's device list, for

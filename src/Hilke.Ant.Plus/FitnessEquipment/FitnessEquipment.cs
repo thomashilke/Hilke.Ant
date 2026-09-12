@@ -220,7 +220,7 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
     public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
 
     private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
-        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus()));
+        StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus(), e.Reason.ToPlus()));
 
     /// <summary>Default FE-C controller (slave) channel configuration.</summary>
     internal static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()
