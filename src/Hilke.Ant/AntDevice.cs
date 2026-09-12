@@ -212,6 +212,8 @@ internal sealed class AntDevice : IAsyncDisposable
         await _writeLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (_logger.IsEnabled(LogLevel.Trace))
+                _logger.LogTrace("ANT TX {Timestamp:O} {Bytes}", DateTimeOffset.UtcNow, Convert.ToHexString(frame.Span));
             await _transport.WriteAsync(frame, ct).ConfigureAwait(false);
         }
         finally
@@ -298,6 +300,9 @@ internal sealed class AntDevice : IAsyncDisposable
 
     private void Dispatch(AntMessage msg)
     {
+        if (_logger.IsEnabled(LogLevel.Trace))
+            _logger.LogTrace("ANT RX {Timestamp:O} {MessageId} {Bytes}",
+                DateTimeOffset.UtcNow, msg.Id, Convert.ToHexString(AntFrame.Encode(msg.Id, msg.Payload.Span)));
         lock (_pendingLock)
         {
             for (int i = 0; i < _pending.Count; i++)

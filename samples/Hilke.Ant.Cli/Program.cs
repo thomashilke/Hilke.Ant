@@ -7,11 +7,13 @@ using Hilke.Ant.Plus.BicyclePower;
 using Hilke.Ant.Plus.FitnessEquipment;
 using Hilke.Ant.Testing;
 using Hilke.Ant.Transport.Serial;
+using Microsoft.Extensions.Logging;
 using Terminal.Gui;
 
 string? port = null;
 bool simulate = false;
 int baud = 115200;
+string? tracePath = null;
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -26,9 +28,12 @@ for (int i = 0; i < args.Length; i++)
         case "--baud" when i + 1 < args.Length:
             _ = int.TryParse(args[++i], out baud);
             break;
+        case "--trace" when i + 1 < args.Length:
+            tracePath = args[++i];
+            break;
         case "--help":
         case "-h":
-            Console.WriteLine("usage: Hilke.Ant.Cli [--port COMx] [--baud 115200] [--simulate]");
+            Console.WriteLine("usage: Hilke.Ant.Cli [--port COMx] [--baud 115200] [--simulate] [--trace path.log]");
             return 0;
     }
 }
@@ -37,12 +42,18 @@ var registry = new DeviceRegistry();
 AntPlusNode node;
 SimulatedAntRadio? sim = null;
 using var appCts = new CancellationTokenSource();
+// Raw datalink trace: every TX/RX ANT frame (message id + hex bytes + UTC timestamp), logged by
+// Hilke.Ant.AntDevice at LogLevel.Trace, independent of what this library currently decodes -
+// a forensic record for diagnosing protocol behavior (see FileTraceLogger below).
+using var traceLogger = tracePath is not null ? new FileTraceLogger(tracePath) : null;
+if (tracePath is not null)
+    TuiApp.AppendLog($"Datalink trace: {tracePath}");
 
 if (simulate)
 {
     var transport = new InMemoryAntTransport();
     sim = new SimulatedAntRadio(transport);
-    node = await AntPlusNode.OpenAsync(transport);
+    node = await AntPlusNode.OpenAsync(transport, traceLogger);
 }
 else
 {
@@ -58,7 +69,7 @@ else
     }
 
     var transport = new SerialAntTransport(port, baud);
-    node = await AntPlusNode.OpenAsync(transport);
+    node = await AntPlusNode.OpenAsync(transport, traceLogger);
 }
 
 var session = new AntSession(node, registry, TuiApp.AppendLog);
@@ -159,4 +170,31 @@ internal static class SimFeed
             // shutting down
         }
     }
+}
+
+/// <summary>
+/// Minimal file-backed <see cref="ILogger"/>: appends every log message as one line, verbatim.
+/// Enabled via <c>--trace path.log</c>; captures the raw ANT datalink trace that
+/// <see cref="Hilke.Ant.AntDevice"/> emits at <see cref="LogLevel.Trace"/> for every TX/RX frame
+/// (message id, hex bytes, UTC timestamp) - independent of what this library currently decodes,
+/// for forensic replay/analysis after the fact.
+/// </summary>
+internal sealed class FileTraceLogger : ILogger, IDisposable
+{
+    private readonly StreamWriter _writer;
+    private readonly object _gate = new();
+
+    public FileTraceLogger(string path) =>
+        _writer = new StreamWriter(new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read)) { AutoFlush = true };
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Trace;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        lock (_gate)
+            _writer.WriteLine(formatter(state, exception));
+    }
+
+    public void Dispose() => _writer.Dispose();
 }

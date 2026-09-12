@@ -1,3 +1,5 @@
+using Hilke.Ant.Plus.Common;
+
 namespace Hilke.Ant.Plus;
 
 /// <summary>
@@ -18,4 +20,6 @@ public interface IAntPlusProfileConnection : IAsyncDisposable
     event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
     /// <summary>Raised for every decoded telemetry update.</summary>
     event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
+    /// <summary>Raised for each received page that no decoder (profile-specific or common) recognized.</summary>
+    event EventHandler<RawDataPage>? UnrecognizedPageReceived;
 }

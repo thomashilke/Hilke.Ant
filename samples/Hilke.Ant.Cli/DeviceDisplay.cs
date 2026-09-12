@@ -11,7 +11,7 @@ internal static class DeviceDisplay
     {
         HeartRateMonitor.DeviceType => $"{Fmt(e.HeartRate)} bpm",
         BicyclePowerMonitor.DeviceType => $"{Fmt(e.PowerWatts)} W  {Fmt(e.Cadence)} rpm",
-        FitnessEquipmentMonitor.DeviceType => $"{Fmt(e.PowerWatts)} W  {Fmt(e.SpeedMps)} m/s",
+        FitnessEquipmentMonitor.DeviceType => $"{Fmt(e.PowerWatts)} W  {Fmt(e.Cadence)} rpm  {Fmt(e.SpeedMps)} m/s",
         _ => "--",
     };
 

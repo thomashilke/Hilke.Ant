@@ -11,12 +11,17 @@ public readonly record struct HeartRateReading(
     byte ComputedHeartRate,
     byte BeatCount,
     ushort BeatEventTime,
+    int? RrIntervalMs,
     byte PageNumber,
     DateTimeOffset At) : IAntPlusDataPage;
 
 /// <summary>Decoder for the ANT+ HRM common data-page fields.</summary>
 internal sealed class HeartRatePageDecoder : IDataPageDecoder<HeartRateReading>
 {
+    private bool _hasPrevious;
+    private byte _prevBeatCount;
+    private ushort _prevBeatEventTime;
+
     public bool TryDecode(ReadOnlySpan<byte> payload8, out HeartRateReading reading)
     {
         if (payload8.Length < 8)
@@ -28,9 +33,27 @@ internal sealed class HeartRatePageDecoder : IDataPageDecoder<HeartRateReading>
         ushort beatEventTime = (ushort)(payload8[4] | (payload8[5] << 8));
         byte beatCount = payload8[6];
         byte computed = payload8[7];
-        reading = new HeartRateReading(computed, beatCount, beatEventTime, page, DateTimeOffset.UtcNow);
+
+        int? rr = null;
+        if (page == 4 && payload8.Length >= 4)
+        {
+            ushort previousBeatEventTime = (ushort)(payload8[2] | (payload8[3] << 8));
+            rr = ComputeRrMs(beatEventTime, previousBeatEventTime);
+        }
+        else if (_hasPrevious && (byte)(beatCount - _prevBeatCount) == 1)
+        {
+            rr = ComputeRrMs(beatEventTime, _prevBeatEventTime);
+        }
+        _hasPrevious = true;
+        _prevBeatCount = beatCount;
+        _prevBeatEventTime = beatEventTime;
+
+        reading = new HeartRateReading(computed, beatCount, beatEventTime, rr, page, DateTimeOffset.UtcNow);
         return true;
     }
+
+    private static int ComputeRrMs(ushort current, ushort previous) =>
+        (int)((ushort)(current - previous) * 1000L / 1024L);
 }
 
 /// <summary>
@@ -77,6 +100,8 @@ public sealed class HeartRateMonitor : IAntPlusProfileConnection
     public event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
     /// <summary>Raised for every decoded telemetry update (heart rate plus any common pages).</summary>
     public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
+    /// <summary>Raised for each received page that no decoder (HRM-specific or common) recognized.</summary>
+    public event EventHandler<RawDataPage>? UnrecognizedPageReceived;
 
     private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
         StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus(), e.Reason.ToPlus()));
@@ -109,12 +134,14 @@ public sealed class HeartRateMonitor : IAntPlusProfileConnection
                 {
                     HeartRateChanged?.Invoke(this, reading);
                     _readings.Writer.TryWrite(reading);
-                    update = new AntPlusTelemetryUpdate { HeartRate = reading.ComputedHeartRate };
+                    update = new AntPlusTelemetryUpdate { HeartRate = reading.ComputedHeartRate, RrIntervalMs = reading.RrIntervalMs };
                 }
-                CommonDataPageDecoders.TryDispatch(span,
+                bool recognized = CommonDataPageDecoders.TryDispatch(span,
                     b => update = (update ?? new AntPlusTelemetryUpdate()) with { Battery = b.Status, BatteryVolts = b.Voltage },
                     m => update = (update ?? new AntPlusTelemetryUpdate()) with { Manufacturer = m },
                     p => update = (update ?? new AntPlusTelemetryUpdate()) with { Product = p });
+                if (!recognized && update is null)
+                    UnrecognizedPageReceived?.Invoke(this, new RawDataPage((byte)(span[0] & 0x7F), span.ToArray(), DateTimeOffset.UtcNow));
                 if (update is { } u)
                     TelemetryUpdated?.Invoke(this, u);
             }

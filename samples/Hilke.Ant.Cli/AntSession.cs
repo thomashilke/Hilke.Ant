@@ -1,6 +1,7 @@
 using Hilke.Ant.Plus;
 using Hilke.Ant.Plus.BicyclePower;
 using Hilke.Ant.Plus.FitnessEquipment;
+using Hilke.Ant.Plus.Common;
 
 namespace Hilke.Ant.Cli;
 
@@ -19,6 +20,7 @@ public sealed class AntSession : IAsyncDisposable
         public required IAntPlusProfileConnection Profile { get; init; }
         public required EventHandler<AntPlusChannelStateChangedEventArgs> StateHandler { get; init; }
         public required EventHandler<AntPlusTelemetryUpdate> TelemetryHandler { get; init; }
+        public required EventHandler<RawDataPage> UnrecognizedPageHandler { get; init; }
     }
 
     private readonly AntPlusNode _node;
@@ -148,11 +150,20 @@ public sealed class AntSession : IAsyncDisposable
         string tok = entry.Token;
         EventHandler<AntPlusChannelStateChangedEventArgs> stateHandler = (_, a) => _registry.WithEntry(tok, x => { x.State = a.NewState; x.LastTransitionReason = a.Reason; });
         EventHandler<AntPlusTelemetryUpdate> telemetryHandler = (_, u) => _registry.WithEntry(tok, x => { Apply(x, u); x.LastSeen = DateTimeOffset.UtcNow; });
+        // Dedupe by page number: log the first sighting of each unrecognized page per connection
+        // rather than flooding the log at the sensor's broadcast rate (up to 8Hz).
+        var seenUnrecognizedPages = new HashSet<byte>();
+        EventHandler<RawDataPage> unrecognizedHandler = (_, p) =>
+        {
+            if (seenUnrecognizedPages.Add(p.PageNumber))
+                _log($"{tok}: unrecognized page 0x{p.PageNumber:X2}: {Convert.ToHexString(p.Payload)}");
+        };
         profile.StateChanged += stateHandler;
         profile.TelemetryUpdated += telemetryHandler;
+        profile.UnrecognizedPageReceived += unrecognizedHandler;
         lock (_gate)
         {
-            _connections[tok] = new Connection { Profile = profile, StateHandler = stateHandler, TelemetryHandler = telemetryHandler };
+            _connections[tok] = new Connection { Profile = profile, StateHandler = stateHandler, TelemetryHandler = telemetryHandler, UnrecognizedPageHandler = unrecognizedHandler };
             _mode = Mode.Connected;
         }
         _registry.WithEntry(tok, x =>
@@ -199,6 +210,7 @@ public sealed class AntSession : IAsyncDisposable
         {
             conn.Profile.StateChanged -= conn.StateHandler;
             conn.Profile.TelemetryUpdated -= conn.TelemetryHandler;
+            conn.Profile.UnrecognizedPageReceived -= conn.UnrecognizedPageHandler;
         }
 
         lock (_gate)
@@ -303,6 +315,30 @@ public sealed class AntSession : IAsyncDisposable
         return op(monitor, default);
     }
 
+    /// <summary>Query and enable Cycling Dynamics features on a connected bicycle power meter, subscribing to its telemetry on success.</summary>
+    public async Task<CyclingDynamicsCapabilities> EnableCyclingDynamicsAsync(string token, CyclingDynamicsFeatures features, TimeSpan timeout)
+    {
+        BicyclePowerMonitor power;
+        string tok;
+        lock (_gate)
+        {
+            if (!_registry.TryResolve(token, out var e) || !_connections.TryGetValue(e.Token, out var c))
+                throw new InvalidOperationException($"Device '{token}' is not connected.");
+            if (c.Profile is not BicyclePowerMonitor m)
+                throw new InvalidOperationException($"'{e.Token}' is not a power meter.");
+            power = m;
+            tok = e.Token;
+        }
+        var result = await power.EnableCyclingDynamicsAsync(features, timeout).ConfigureAwait(false);
+        if (result.Result is CyclingDynamicsResult.Enabled or CyclingDynamicsResult.PartiallyEnabled)
+        {
+            power.PedalForceAngleReceived += (_, a) => _log($"{tok}: pedal-force {a.Side} start={a.StartAngleDegrees:F0}deg end={a.EndAngleDegrees:F0}deg torque={a.TorqueNewtonMeters:F1}Nm");
+            power.PedalPositionReceived += (_, p) => _log($"{tok}: pedal-position {p.Position} cadence={p.CadenceRpm}rpm pco(R/L)={p.RightPlatformCenterOffsetMm}/{p.LeftPlatformCenterOffsetMm}mm");
+            power.TorqueBarycenterReceived += (_, t) => _log($"{tok}: torque-barycenter {t.AngleDegrees:F1}deg");
+        }
+        return result;
+    }
+
     private static void Apply(TrackedDeviceEntry x, AntPlusTelemetryUpdate u)
     {
         if (u.HeartRate is { } hr) x.HeartRate = hr;
@@ -311,6 +347,12 @@ public sealed class AntSession : IAsyncDisposable
         if (u.Cadence is { } cad) x.Cadence = cad;
         if (u.SpeedMps is { } sp) x.SpeedMps = sp;
         if (u.TrainerStatus is { } ts) x.TrainerStatus = ts;
+        if (u.RrIntervalMs is { } rr) x.RrIntervalMs = rr;
+        if (u.LeftTorqueEffectivenessPercent is { } lte) x.LeftTorqueEffectivenessPercent = lte;
+        if (u.RightTorqueEffectivenessPercent is { } rte) x.RightTorqueEffectivenessPercent = rte;
+        if (u.LeftPedalSmoothnessPercent is { } lps) x.LeftPedalSmoothnessPercent = lps;
+        if (u.RightPedalSmoothnessPercent is { } rps) x.RightPedalSmoothnessPercent = rps;
+        if (u.CombinedPedalSmoothnessPercent is { } cps) x.CombinedPedalSmoothnessPercent = cps;
         if (u.Battery is { } bs) x.Battery = bs;
         if (u.BatteryVolts is { } bv) x.BatteryVolts = bv;
         if (u.Manufacturer is { } mfg) x.Manufacturer = mfg;

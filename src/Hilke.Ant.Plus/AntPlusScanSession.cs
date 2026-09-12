@@ -44,26 +44,36 @@ public sealed class AntPlusScanSession : IAsyncDisposable
     {
         private readonly HeartRatePageDecoder? _hrm;
         private readonly BicyclePowerDecoder? _power;
+        private readonly TorqueEffectivenessDecoder? _tePs;
         private readonly GeneralFitnessDataDecoder? _feGeneral;
         private readonly TrainerDataDecoder? _feTrainer;
 
-        private ProfileDecoderSet(HeartRatePageDecoder? hrm, BicyclePowerDecoder? power, GeneralFitnessDataDecoder? feGeneral, TrainerDataDecoder? feTrainer)
-        { _hrm = hrm; _power = power; _feGeneral = feGeneral; _feTrainer = feTrainer; }
+        private ProfileDecoderSet(HeartRatePageDecoder? hrm, BicyclePowerDecoder? power, TorqueEffectivenessDecoder? tePs, GeneralFitnessDataDecoder? feGeneral, TrainerDataDecoder? feTrainer)
+        { _hrm = hrm; _power = power; _tePs = tePs; _feGeneral = feGeneral; _feTrainer = feTrainer; }
 
         public static ProfileDecoderSet Create(byte deviceType) => deviceType switch
         {
-            HeartRateMonitor.DeviceType => new(new HeartRatePageDecoder(), null, null, null),
-            BicyclePowerMonitor.DeviceType => new(null, new BicyclePowerDecoder(), null, null),
-            FitnessEquipmentMonitor.DeviceType => new(null, null, new GeneralFitnessDataDecoder(), new TrainerDataDecoder()),
-            _ => new(null, null, null, null),
+            HeartRateMonitor.DeviceType => new(new HeartRatePageDecoder(), null, null, null, null),
+            BicyclePowerMonitor.DeviceType => new(null, new BicyclePowerDecoder(), new TorqueEffectivenessDecoder(), null, null),
+            FitnessEquipmentMonitor.DeviceType => new(null, null, null, new GeneralFitnessDataDecoder(), new TrainerDataDecoder()),
+            _ => new(null, null, null, null, null),
         };
 
         public AntPlusTelemetryUpdate Decode(ReadOnlySpan<byte> page8)
         {
             var update = new AntPlusTelemetryUpdate();
-            if (_hrm is { } hrm && hrm.TryDecode(page8, out var hr)) update = update with { HeartRate = hr.ComputedHeartRate };
+            if (_hrm is { } hrm && hrm.TryDecode(page8, out var hr)) update = update with { HeartRate = hr.ComputedHeartRate, RrIntervalMs = hr.RrIntervalMs };
             if (_power is { } power && power.TryDecode(page8, out var pw))
                 update = update with { PowerWatts = pw.InstantaneousPower, Cadence = pw.Cadence, AveragePower = pw.AveragePower ?? update.AveragePower };
+            if (_tePs is { } te && te.TryDecode(page8, out var tePs))
+                update = update with
+                {
+                    LeftTorqueEffectivenessPercent = tePs.LeftTorqueEffectivenessPercent,
+                    RightTorqueEffectivenessPercent = tePs.RightTorqueEffectivenessPercent,
+                    LeftPedalSmoothnessPercent = tePs.LeftPedalSmoothnessPercent,
+                    RightPedalSmoothnessPercent = tePs.RightPedalSmoothnessPercent,
+                    CombinedPedalSmoothnessPercent = tePs.CombinedPedalSmoothnessPercent,
+                };
             if (_feGeneral is { } fg && fg.TryDecode(page8, out var general))
                 update = update with { SpeedMps = general.SpeedMetersPerSecond, HeartRate = general.HeartRate ?? update.HeartRate };
             else if (_feTrainer is { } ft && ft.TryDecode(page8, out var trainer))

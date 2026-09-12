@@ -71,6 +71,44 @@ internal sealed class BicyclePowerDecoder : IDataPageDecoder<BicyclePowerReading
     }
 }
 
+/// <summary>A decoded ANT+ Torque Effectiveness and Pedal Smoothness page (0x13).</summary>
+public readonly record struct TorqueEffectivenessReading(
+    byte EventCount,
+    double? LeftTorqueEffectivenessPercent,
+    double? RightTorqueEffectivenessPercent,
+    double? LeftPedalSmoothnessPercent,
+    double? RightPedalSmoothnessPercent,
+    double? CombinedPedalSmoothnessPercent,
+    byte PageNumber,
+    DateTimeOffset At) : IAntPlusDataPage;
+
+/// <summary>Decoder for the ANT+ Bicycle Power Torque Effectiveness and Pedal Smoothness page (0x13).</summary>
+internal sealed class TorqueEffectivenessDecoder : IDataPageDecoder<TorqueEffectivenessReading>
+{
+    public const byte Page = 0x13;
+
+    public bool TryDecode(ReadOnlySpan<byte> payload8, out TorqueEffectivenessReading reading)
+    {
+        reading = default;
+        if (payload8.Length < 8 || (payload8[0] & 0x7F) != Page)
+            return false;
+
+        byte eventCount = payload8[1];
+        double? Pct(byte raw) => raw == 0xFF ? null : raw * 0.5;
+        double? leftTe = Pct(payload8[2]);
+        double? rightTe = Pct(payload8[3]);
+        double? leftOrCombinedPs = Pct(payload8[4]);
+        byte rightPsRaw = payload8[5];
+
+        double? leftPs, rightPs, combinedPs;
+        if (rightPsRaw == 0xFE) { combinedPs = leftOrCombinedPs; leftPs = null; rightPs = null; }
+        else { leftPs = leftOrCombinedPs; rightPs = Pct(rightPsRaw); combinedPs = null; }
+
+        reading = new TorqueEffectivenessReading(eventCount, leftTe, rightTe, leftPs, rightPs, combinedPs, Page, DateTimeOffset.UtcNow);
+        return true;
+    }
+}
+
 /// <summary>
 /// Reference ANT+ profile: wraps an <see cref="AntChannel"/> configured as a Bicycle Power
 /// display (slave), decodes standard power-only pages, and surfaces readings.
@@ -86,18 +124,24 @@ public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
     /// <summary>ANT+ managed network number.</summary>
     public const byte AntPlusNetwork = AntPlusProtocol.NetworkNumber;
 
-    private readonly AntChannel _channel;
+    private AntChannel _channel;
     private readonly BicyclePowerDecoder _decoder = new();
+    private readonly TorqueEffectivenessDecoder _tePs = new();
+    private readonly PedalForceAngleDecoder _forceAngle = new();
+    private readonly PedalPositionDecoder _pedalPosition = new();
+    private readonly TorqueBarycenterDecoder _torqueBarycenter = new();
     private readonly PowerMeterCalibrationSession _calibration;
-    private readonly Channel<BicyclePowerReading> _readings = System.Threading.Channels.Channel.CreateBounded<BicyclePowerReading>(
+    private CyclingDynamicsCapabilityQuery _cyclingDynamics;
+    private Channel<BicyclePowerReading> _readings = System.Threading.Channels.Channel.CreateBounded<BicyclePowerReading>(
         new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = false, SingleWriter = true });
-    private readonly CancellationTokenSource _pumpCts;
-    private readonly Task _pump;
+    private CancellationTokenSource _pumpCts;
+    private Task _pump;
 
     internal BicyclePowerMonitor(AntChannel channel)
     {
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
         _calibration = new PowerMeterCalibrationSession(_channel);
+        _cyclingDynamics = new CyclingDynamicsCapabilityQuery(_channel);
         DeviceId = AntPlusDeviceId.FromCore(channel.Configuration.ChannelId);
         _channel.StateChanged += OnChannelStateChanged;
         _pumpCts = new CancellationTokenSource();
@@ -131,6 +175,16 @@ public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
 
     /// <summary>Raised for each decoded power reading.</summary>
     public event EventHandler<BicyclePowerReading>? PowerReceived;
+    /// <summary>Raised for each decoded Torque Effectiveness and Pedal Smoothness reading.</summary>
+    public event EventHandler<TorqueEffectivenessReading>? TorqueEffectivenessReceived;
+    /// <summary>Raised for each decoded Pedal Force Angle (Power Phase) reading, once Cycling Dynamics is enabled.</summary>
+    public event EventHandler<PedalForceAngleReading>? PedalForceAngleReceived;
+    /// <summary>Raised for each decoded Pedal Position reading, once Cycling Dynamics is enabled.</summary>
+    public event EventHandler<PedalPositionReading>? PedalPositionReceived;
+    /// <summary>Raised for each decoded Torque Barycenter reading, once Cycling Dynamics is enabled.</summary>
+    public event EventHandler<TorqueBarycenterReading>? TorqueBarycenterReceived;
+    /// <summary>Raised for each received page that no decoder (Bicycle-Power-specific or common) recognized.</summary>
+    public event EventHandler<RawDataPage>? UnrecognizedPageReceived;
 
     /// <summary>Default Bicycle Power display (slave) channel configuration.</summary>
     internal static ChannelConfiguration SlaveDefaults(ChannelId? id = null) => new()
@@ -143,6 +197,71 @@ public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
         UseExtendedMessages = true,
         InactivityTimeout = TimeSpan.FromSeconds(4),
     };
+
+    /// <summary>Bicycle Power channel configuration at 8Hz (~8.01 Hz), required for Cycling Dynamics pages.</summary>
+    internal static ChannelConfiguration CyclingDynamicsSlaveDefaults(ChannelId id) => SlaveDefaults(id) with { ChannelPeriod = 4091 };
+
+    /// <summary>
+    /// Query the sensor's Cycling Dynamics capabilities and, if any of <paramref name="requested"/> are
+    /// supported, enable them and switch the channel to 8Hz. Returns <see cref="CyclingDynamicsResult.Unsupported"/>
+    /// (no channel change) if the sensor never responds to the capability query or supports none of what
+    /// was requested.
+    /// </summary>
+    public async Task<CyclingDynamicsCapabilities> EnableCyclingDynamicsAsync(CyclingDynamicsFeatures requested, TimeSpan timeout, CancellationToken ct = default)
+    {
+        var response = await _cyclingDynamics.QueryAsync(timeout, ct).ConfigureAwait(false);
+        if (response is not { } resp)
+            return new CyclingDynamicsCapabilities(CyclingDynamicsResult.TimedOut, CyclingDynamicsFeatures.None, CyclingDynamicsFeatures.None);
+
+        var supported = (CyclingDynamicsFeatures)(~resp.CapabilitiesMask & 0x78);
+        var toEnable = requested & supported;
+        if (toEnable == CyclingDynamicsFeatures.None)
+            return new CyclingDynamicsCapabilities(CyclingDynamicsResult.Unsupported, supported, CyclingDynamicsFeatures.None);
+
+        try { await _cyclingDynamics.SendSetAsync(toEnable, ct).ConfigureAwait(false); }
+        catch (AntCommandException ex) { throw new AntPlusCommandException(ex.Message); }
+        catch (AntTimeoutException ex) { throw new AntPlusTimeoutException(ex.Message); }
+
+        await SwitchToEightHertzAsync(ct).ConfigureAwait(false);
+
+        var result = toEnable == requested ? CyclingDynamicsResult.Enabled : CyclingDynamicsResult.PartiallyEnabled;
+        return new CyclingDynamicsCapabilities(result, supported, toEnable);
+    }
+
+    private async Task SwitchToEightHertzAsync(CancellationToken ct)
+    {
+        var oldChannel = _channel;
+        var device = oldChannel.Device;
+        var channelId = oldChannel.Configuration.ChannelId;
+        var channelNumber = oldChannel.ChannelNumber;
+
+        _pumpCts.Cancel();
+        _readings.Writer.TryComplete();
+        try { await _pump.ConfigureAwait(false); } catch { /* pump observes its own cancellation */ }
+        _pumpCts.Dispose();
+        oldChannel.StateChanged -= OnChannelStateChanged;
+        try { await oldChannel.CloseAsync(ct).ConfigureAwait(false); } catch { /* best effort */ }
+        try { await oldChannel.UnassignAsync(ct).ConfigureAwait(false); } catch { /* best effort */ }
+        await oldChannel.DisposeAsync().ConfigureAwait(false);
+
+        AntChannel newChannel;
+        try { newChannel = await device.ConfigureChannelAsync(channelNumber, CyclingDynamicsSlaveDefaults(channelId), ct).ConfigureAwait(false); }
+        catch (RadioBusyException ex) { throw new AntPlusBusyException(ex.Message); }
+        catch (AntCommandException ex) { throw new AntPlusCommandException(ex.Message); }
+        catch (AntTimeoutException ex) { throw new AntPlusTimeoutException(ex.Message); }
+        try { await newChannel.OpenAsync(ct).ConfigureAwait(false); }
+        catch (AntCommandException ex) { throw new AntPlusCommandException(ex.Message); }
+        catch (AntTimeoutException ex) { throw new AntPlusTimeoutException(ex.Message); }
+        catch (InvalidChannelStateException ex) { throw new AntPlusCommandException(ex.Message); }
+
+        _channel = newChannel;
+        _channel.StateChanged += OnChannelStateChanged;
+        _cyclingDynamics = new CyclingDynamicsCapabilityQuery(_channel);
+        _readings = System.Threading.Channels.Channel.CreateBounded<BicyclePowerReading>(
+            new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = false, SingleWriter = true });
+        _pumpCts = new CancellationTokenSource();
+        _pump = Task.Run(() => PumpAsync(_pumpCts.Token));
+    }
 
     /// <summary>Decode and stream power readings from the underlying channel.</summary>
     public IAsyncEnumerable<BicyclePowerReading> ReadingsAsync(CancellationToken ct = default)
@@ -158,8 +277,10 @@ public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
                 _calibration.HandleData(span, message.ReceivedAt);
 
                 AntPlusTelemetryUpdate? update = null;
+                bool recognized = false;
                 if (_decoder.TryDecode(span, out var reading))
                 {
+                    recognized = true;
                     PowerReceived?.Invoke(this, reading);
                     _readings.Writer.TryWrite(reading);
                     update = new AntPlusTelemetryUpdate
@@ -169,10 +290,30 @@ public sealed class BicyclePowerMonitor : IAntPlusProfileConnection
                         AveragePower = reading.AveragePower,
                     };
                 }
-                CommonDataPageDecoders.TryDispatch(span,
+                if (_tePs.TryDecode(span, out var tePs))
+                {
+                    recognized = true;
+                    TorqueEffectivenessReceived?.Invoke(this, tePs);
+                    update = (update ?? new AntPlusTelemetryUpdate()) with
+                    {
+                        LeftTorqueEffectivenessPercent = tePs.LeftTorqueEffectivenessPercent,
+                        RightTorqueEffectivenessPercent = tePs.RightTorqueEffectivenessPercent,
+                        LeftPedalSmoothnessPercent = tePs.LeftPedalSmoothnessPercent,
+                        RightPedalSmoothnessPercent = tePs.RightPedalSmoothnessPercent,
+                        CombinedPedalSmoothnessPercent = tePs.CombinedPedalSmoothnessPercent,
+                    };
+                }
+                if (_cyclingDynamics.HandleData(span)) recognized = true;
+                if (_forceAngle.TryDecode(span, out var fa)) { recognized = true; PedalForceAngleReceived?.Invoke(this, fa); }
+                if (_pedalPosition.TryDecode(span, out var pp)) { recognized = true; PedalPositionReceived?.Invoke(this, pp); }
+                if (_torqueBarycenter.TryDecode(span, out var tb)) { recognized = true; TorqueBarycenterReceived?.Invoke(this, tb); }
+                if (CommonDataPageDecoders.TryDispatch(span,
                     b => update = (update ?? new AntPlusTelemetryUpdate()) with { Battery = b.Status, BatteryVolts = b.Voltage },
                     m => update = (update ?? new AntPlusTelemetryUpdate()) with { Manufacturer = m },
-                    p => update = (update ?? new AntPlusTelemetryUpdate()) with { Product = p });
+                    p => update = (update ?? new AntPlusTelemetryUpdate()) with { Product = p }))
+                    recognized = true;
+                if (!recognized)
+                    UnrecognizedPageReceived?.Invoke(this, new RawDataPage((byte)(span[0] & 0x7F), span.ToArray(), DateTimeOffset.UtcNow));
                 if (update is { } u)
                     TelemetryUpdated?.Invoke(this, u);
             }

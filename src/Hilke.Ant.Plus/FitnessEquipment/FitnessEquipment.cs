@@ -218,6 +218,8 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
     public event EventHandler<AntPlusChannelStateChangedEventArgs>? StateChanged;
     /// <summary>Raised for every decoded telemetry update (speed/power/heart rate plus any common pages).</summary>
     public event EventHandler<AntPlusTelemetryUpdate>? TelemetryUpdated;
+    /// <summary>Raised for each received page that no decoder (FE-C-specific or common) recognized.</summary>
+    public event EventHandler<RawDataPage>? UnrecognizedPageReceived;
 
     private void OnChannelStateChanged(object? sender, ChannelStateChangedEventArgs e) =>
         StateChanged?.Invoke(this, new AntPlusChannelStateChangedEventArgs(e.OldState.ToPlus(), e.NewState.ToPlus(), e.Reason.ToPlus()));
@@ -246,8 +248,10 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
             {
                 var span = message.Payload.Span;
                 AntPlusTelemetryUpdate? update = null;
+                bool recognized = false;
                 if (_general.TryDecode(span, out var general))
                 {
+                    recognized = true;
                     GeneralDataReceived?.Invoke(this, general);
                     _readings.Writer.TryWrite(new FitnessEquipmentUpdate(FitnessEquipmentPage.GeneralData, general, null));
                     update = new AntPlusTelemetryUpdate { SpeedMps = general.SpeedMetersPerSecond };
@@ -256,6 +260,7 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
                 }
                 else if (_trainer.TryDecode(span, out var trainer))
                 {
+                    recognized = true;
                     TrainerDataReceived?.Invoke(this, trainer);
                     _readings.Writer.TryWrite(new FitnessEquipmentUpdate(FitnessEquipmentPage.SpecificTrainerData, null, trainer));
                     update = new AntPlusTelemetryUpdate { Cadence = trainer.Cadence, TrainerStatus = $"0x{trainer.TrainerStatus:X1}" };
@@ -263,11 +268,17 @@ public sealed class FitnessEquipmentMonitor : IAntPlusProfileConnection
                         update = update with { PowerWatts = ip };
                 }
                 if (_commandStatus.TryDecode(span, out var commandStatus))
+                {
+                    recognized = true;
                     CommandStatusReceived?.Invoke(this, commandStatus);
-                CommonDataPageDecoders.TryDispatch(span,
+                }
+                if (CommonDataPageDecoders.TryDispatch(span,
                     b => update = (update ?? new AntPlusTelemetryUpdate()) with { Battery = b.Status, BatteryVolts = b.Voltage },
                     m => update = (update ?? new AntPlusTelemetryUpdate()) with { Manufacturer = m },
-                    p => update = (update ?? new AntPlusTelemetryUpdate()) with { Product = p });
+                    p => update = (update ?? new AntPlusTelemetryUpdate()) with { Product = p }))
+                    recognized = true;
+                if (!recognized)
+                    UnrecognizedPageReceived?.Invoke(this, new RawDataPage((byte)(span[0] & 0x7F), span.ToArray(), DateTimeOffset.UtcNow));
                 if (update is { } u)
                     TelemetryUpdated?.Invoke(this, u);
             }

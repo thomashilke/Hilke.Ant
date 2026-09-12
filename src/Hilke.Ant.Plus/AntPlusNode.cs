@@ -3,6 +3,7 @@ using Hilke.Ant.Transport;
 using Hilke.Ant.Plus.HeartRate;
 using Hilke.Ant.Plus.BicyclePower;
 using Hilke.Ant.Plus.FitnessEquipment;
+using Microsoft.Extensions.Logging;
 
 namespace Hilke.Ant.Plus;
 
@@ -19,10 +20,21 @@ public sealed class AntPlusNode : IAsyncDisposable
 
     private AntPlusNode(AntDevice device) => _device = device;
 
-    /// <summary>Open the transport and program it onto the ANT+ managed network. Owns the transport thereafter.</summary>
-    public static async Task<AntPlusNode> OpenAsync(IAntTransport transport, CancellationToken ct = default)
+    /// <summary>
+    /// Open the transport and program it onto the ANT+ managed network. Owns the transport thereafter.
+    /// </summary>
+    /// <param name="transport">The underlying serial/USB transport.</param>
+    /// <param name="logger">
+    /// Optional sink for a raw datalink trace: every outbound and inbound ANT frame is logged at
+    /// <see cref="LogLevel.Trace"/> (message id + hex bytes + UTC timestamp), verbatim, before any
+    /// application-level decoding - a complete forensic record independent of what this library
+    /// currently knows how to interpret. No overhead when the logger doesn't enable Trace (e.g. the
+    /// default <c>null</c>, which uses a no-op logger).
+    /// </param>
+    /// <param name="ct">Cancellation token.</param>
+    public static async Task<AntPlusNode> OpenAsync(IAntTransport transport, ILogger? logger = null, CancellationToken ct = default)
     {
-        var device = new AntDevice(transport);
+        var device = new AntDevice(transport, logger);
         try
         {
             await device.OpenAsync(ct).ConfigureAwait(false);

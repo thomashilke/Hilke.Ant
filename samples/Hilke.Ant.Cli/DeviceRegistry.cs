@@ -27,6 +27,12 @@ public sealed class TrackedDeviceEntry
     public int? Cadence { get; set; }
     public double? SpeedMps { get; set; }
     public string? TrainerStatus { get; set; }
+    public int? RrIntervalMs { get; set; }
+    public double? LeftTorqueEffectivenessPercent { get; set; }
+    public double? RightTorqueEffectivenessPercent { get; set; }
+    public double? LeftPedalSmoothnessPercent { get; set; }
+    public double? RightPedalSmoothnessPercent { get; set; }
+    public double? CombinedPedalSmoothnessPercent { get; set; }
 
     public BatteryStatus? Battery { get; set; }
     public double? BatteryVolts { get; set; }

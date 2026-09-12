@@ -34,6 +34,7 @@ internal sealed class AntChannel : IAsyncDisposable
     public byte ChannelNumber { get; }
     public ChannelConfiguration Configuration { get; }
     public ChannelState State { get; private set; }
+    internal AntDevice Device => _device;
     public ChannelId? TrackedDevice { get; private set; }
 
     /// <summary>Raised on every library-level state transition.</summary>

@@ -45,6 +45,7 @@ public sealed class CommandProcessor
                 case "power": await PowerAsync(args); break;
                 case "resistance": await ResistanceAsync(args); break;
                 case "calibrate": await CalibrateAsync(args); break;
+                case "dynamics": await DynamicsAsync(args); break;
                 case "quit":
                 case "exit":
                     _shutdown();
@@ -73,6 +74,7 @@ public sealed class CommandProcessor
         _log("  power <token> <watts>    FE-C: set target power");
         _log("  resistance <token> <pct> FE-C: set basic resistance");
         _log("  calibrate <token> [auto on|off]  bike power: manual zero / auto-zero config");
+        _log("  dynamics <token> <phase|pco|position|barycenter|all> [more flags...]  bike power: enable Cycling Dynamics");
         _log("  quit | exit              leave (Ctrl+Q)");
     }
 
@@ -177,7 +179,13 @@ public sealed class CommandProcessor
         _log($"  profile: {e.ProfileName}   state: {DeviceDisplay.FormatState(e)}" +
              $"{(e.ChannelNumber is { } ch ? $"   channel: {ch}" : "")}");
         _log($"  telemetry: hr={Fmt(e.HeartRate)} power={Fmt(e.PowerWatts)}W avg={Fmt(e.AveragePower)}W " +
-             $"cad={Fmt(e.Cadence)} speed={Fmt(e.SpeedMps)}m/s trainer={e.TrainerStatus ?? "--"}");
+             $"cad={Fmt(e.Cadence)} speed={Fmt(e.SpeedMps)}m/s trainer={e.TrainerStatus ?? "--"} rr={Fmt(e.RrIntervalMs)}ms");
+        if (e.LeftTorqueEffectivenessPercent is not null || e.RightTorqueEffectivenessPercent is not null ||
+            e.LeftPedalSmoothnessPercent is not null || e.RightPedalSmoothnessPercent is not null || e.CombinedPedalSmoothnessPercent is not null)
+        {
+            _log($"  pedal: TE L={Fmt(e.LeftTorqueEffectivenessPercent)}% R={Fmt(e.RightTorqueEffectivenessPercent)}%  " +
+                 $"PS L={Fmt(e.LeftPedalSmoothnessPercent)}% R={Fmt(e.RightPedalSmoothnessPercent)}% combined={Fmt(e.CombinedPedalSmoothnessPercent)}%");
+        }
         _log($"  battery: {(e.Battery?.ToString() ?? "--")} {(e.BatteryVolts is { } v ? $"{v:F2}V" : "")}");
         if (e.Manufacturer is { } m)
             _log($"  manufacturer: id={m.ManufacturerId} model={m.ModelNumber} hw={m.HardwareRevision}");
@@ -267,6 +275,44 @@ public sealed class CommandProcessor
         catch (InvalidOperationException ex)
         {
             _log($"calibrate: {ex.Message}");
+        }
+    }
+
+    private async Task DynamicsAsync(string[] args)
+    {
+        if (args.Length < 3)
+        {
+            _log("usage: dynamics <token> <phase|pco|position|barycenter|all> [more flags...]");
+            return;
+        }
+        var features = CyclingDynamicsFeatures.None;
+        for (int i = 2; i < args.Length; i++)
+        {
+            switch (args[i].ToLowerInvariant())
+            {
+                case "phase": features |= CyclingDynamicsFeatures.PowerPhase; break;
+                case "pco": features |= CyclingDynamicsFeatures.PlatformCenterOffset; break;
+                case "position": features |= CyclingDynamicsFeatures.RiderPosition; break;
+                case "barycenter": features |= CyclingDynamicsFeatures.TorqueBarycenter; break;
+                case "all":
+                    features = CyclingDynamicsFeatures.PowerPhase | CyclingDynamicsFeatures.PlatformCenterOffset |
+                               CyclingDynamicsFeatures.RiderPosition | CyclingDynamicsFeatures.TorqueBarycenter;
+                    break;
+                default:
+                    _log($"dynamics: unknown flag '{args[i]}'.");
+                    return;
+            }
+        }
+        // Real-world capability queries can need a few retries against RF loss; give the retry
+        // loop in CyclingDynamicsCapabilityQuery.QueryAsync (1.5s cadence) enough headroom.
+        try
+        {
+            var result = await _session.EnableCyclingDynamicsAsync(args[1], features, TimeSpan.FromSeconds(8));
+            _log($"dynamics: {args[1]} -> {result.Result} (supported={result.Supported}, enabled={result.Enabled}).");
+        }
+        catch (InvalidOperationException ex)
+        {
+            _log($"dynamics: {ex.Message}");
         }
     }
 

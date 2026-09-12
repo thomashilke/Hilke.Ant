@@ -30,4 +30,16 @@ public sealed record AntPlusTelemetryUpdate
     public ManufacturerInfoPage? Manufacturer { get; init; }
     /// <summary>Product info, when a common Product Information page was just decoded.</summary>
     public ProductInfoPage? Product { get; init; }
+    /// <summary>Heart rate variability (R-R interval) in milliseconds, when a page carrying it was just decoded.</summary>
+    public int? RrIntervalMs { get; init; }
+    /// <summary>Left-leg torque effectiveness percentage, when a Torque Effectiveness and Pedal Smoothness page was just decoded.</summary>
+    public double? LeftTorqueEffectivenessPercent { get; init; }
+    /// <summary>Right-leg torque effectiveness percentage, when a Torque Effectiveness and Pedal Smoothness page was just decoded.</summary>
+    public double? RightTorqueEffectivenessPercent { get; init; }
+    /// <summary>Left-leg (or combined) pedal smoothness percentage, when a Torque Effectiveness and Pedal Smoothness page was just decoded.</summary>
+    public double? LeftPedalSmoothnessPercent { get; init; }
+    /// <summary>Right-leg pedal smoothness percentage, when a Torque Effectiveness and Pedal Smoothness page was just decoded.</summary>
+    public double? RightPedalSmoothnessPercent { get; init; }
+    /// <summary>Combined pedal smoothness percentage, when the sensor reports a single combined value instead of left/right.</summary>
+    public double? CombinedPedalSmoothnessPercent { get; init; }
 }

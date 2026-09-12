@@ -119,14 +119,16 @@ internal static class CommonDataPageDecoders
     private static readonly ManufacturerInfoDecoder Manufacturer = new();
     private static readonly ProductInfoDecoder Product = new();
 
-    internal static void TryDispatch(
+    internal static bool TryDispatch(
         ReadOnlySpan<byte> page8,
         Action<BatteryStatusPage> onBattery,
         Action<ManufacturerInfoPage> onManufacturer,
         Action<ProductInfoPage> onProduct)
     {
-        if (Battery.TryDecode(page8, out var battery)) onBattery(battery);
-        if (Manufacturer.TryDecode(page8, out var manufacturer)) onManufacturer(manufacturer);
-        if (Product.TryDecode(page8, out var product)) onProduct(product);
+        bool recognized = false;
+        if (Battery.TryDecode(page8, out var battery)) { onBattery(battery); recognized = true; }
+        if (Manufacturer.TryDecode(page8, out var manufacturer)) { onManufacturer(manufacturer); recognized = true; }
+        if (Product.TryDecode(page8, out var product)) { onProduct(product); recognized = true; }
+        return recognized;
     }
 }
